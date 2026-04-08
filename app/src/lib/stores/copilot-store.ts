@@ -5,6 +5,10 @@ import {
   ICopilotCommitMessage,
   parseCopilotCommitMessage,
 } from '../copilot-commit-message'
+import {
+  ICopilotConflictResolutionResponse,
+  parseCopilotConflictResolution,
+} from '../copilot-conflict-resolution'
 import { Emitter, Disposable } from 'event-kit'
 import * as ipcRenderer from '../ipc-renderer'
 import { join } from 'path'
@@ -54,6 +58,50 @@ the JSON object, just return it as plain text. For example:
   "title": "Fix issue with login form",
   "description": "The login form was not submitting correctly. This commit fixes that issue by adding a missing \`name\` attribute to the submit button."
 }
+`
+
+/**
+ * System prompt for the Copilot conflict resolution session.
+ */
+const ConflictResolutionSystemPrompt = `
+You are an expert merge conflict resolver for a Git repository. Your task is to analyze merge conflicts and produce correct, clean resolutions.
+
+You will receive:
+- Branch names for both sides of the merge
+- The conflict markers from each conflicted file (ours, theirs, and optionally base content)
+- Context lines surrounding each conflict
+- When available: recent commit messages from both branches explaining the intent behind changes
+- When available: the pull request title and description providing higher-level context
+
+Your job:
+1. Understand the INTENT behind each side's changes using commit messages and PR context when available
+2. Resolve each conflict by producing the correct merged content
+3. Explain your reasoning for each resolution
+4. Rate your confidence (high/medium/low)
+
+Resolution guidelines:
+- When both sides add complementary code (e.g., different imports, different functions), combine them
+- When both sides modify the same code differently, use commit messages and PR context to determine the correct resolution
+- When one side deletes code the other modifies, determine if the deletion was intentional
+- Preserve code correctness: imports, types, formatting must be valid
+- When in doubt, prefer the approach that maintains backward compatibility
+
+You MUST respond with valid JSON in this exact format:
+{
+  "resolutions": [
+    {
+      "path": "relative/file/path.ts",
+      "resolvedContent": "the complete resolved file content with all conflicts resolved",
+      "reasoning": "explanation of how you resolved each conflict and why",
+      "confidence": "high|medium|low"
+    }
+  ]
+}
+
+Important:
+- resolvedContent must contain the COMPLETE file content (not just the conflicted sections)
+- All conflict markers must be removed in the resolved content
+- Include one resolution entry per conflicted file
 `
 
 /**
@@ -180,6 +228,57 @@ export class CopilotStore {
       return parseCopilotCommitMessage(response.data.content)
     } catch (e) {
       log.warn('CopilotStore: Failed to generate commit message', e)
+      throw e
+    } finally {
+      // Clean up the session
+      await session?.destroy().catch(() => {})
+
+      // Stop the client after use
+      await this.stopClient(client)
+    }
+  }
+
+  /**
+   * Use the Copilot SDK to analyze merge conflicts and suggest resolutions.
+   *
+   * @param conflictPrompt - The formatted conflict context prompt string
+   * @param repositoryPath - Path to the repository working directory
+   * @returns The parsed conflict resolution response
+   * @throws Error if no GitHub.com account is available or if resolution fails
+   */
+  public async resolveConflicts(
+    conflictPrompt: string,
+    repositoryPath: string
+  ): Promise<ICopilotConflictResolutionResponse> {
+    const client = await this.createClient(repositoryPath)
+    let session: Awaited<ReturnType<CopilotClient['createSession']>> | null =
+      null
+
+    try {
+      session = await client.createSession({
+        model: 'gpt-5-mini',
+        reasoningEffort: 'medium',
+        systemMessage: {
+          mode: 'append',
+          content: ConflictResolutionSystemPrompt,
+        },
+        onPermissionRequest: async () => ({
+          kind: 'denied-interactively-by-user',
+        }),
+      })
+
+      const response = await session.sendAndWait(
+        { prompt: conflictPrompt },
+        60000
+      )
+
+      if (!response || !response.data.content) {
+        throw new Error('No response from Copilot')
+      }
+
+      return parseCopilotConflictResolution(response.data.content)
+    } catch (e) {
+      log.warn('CopilotStore: Failed to resolve conflicts', e)
       throw e
     } finally {
       // Clean up the session

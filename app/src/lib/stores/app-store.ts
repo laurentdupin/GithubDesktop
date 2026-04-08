@@ -256,6 +256,7 @@ import {
 import { ManualConflictResolution } from '../../models/manual-conflict-resolution'
 import { BranchPruner } from './helpers/branch-pruner'
 import {
+  enableCopilotConflictResolution,
   enableCopilotSdkCommitMessageGeneration,
   enableCustomIntegration,
 } from '../feature-flag'
@@ -283,7 +284,7 @@ import {
   isValidTutorialStep,
 } from '../../models/tutorial-step'
 import { OnboardingTutorialAssessor } from './helpers/tutorial-assessor'
-import { getUntrackedFiles } from '../status'
+import { getConflictedFiles, getUntrackedFiles } from '../status'
 import { isBranchPushable } from '../helpers/push-control'
 import {
   findAssociatedPullRequest,
@@ -360,6 +361,11 @@ import {
 import { updateStore } from '../../ui/lib/update-store'
 import { BypassReasonType } from '../../ui/secret-scanning/bypass-push-protection-dialog'
 import { getRepoHooks } from '../hooks/get-repo-hooks'
+import { ICopilotConflictResolutionResponse } from '../copilot-conflict-resolution'
+import {
+  buildConflictContext,
+  formatConflictContextForPrompt,
+} from '../copilot-conflict-context'
 
 const LastSelectedRepositoryIDKey = 'last-selected-repository-id'
 
@@ -5687,6 +5693,59 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
       return true
     })
+  }
+
+  /** This shouldn't be called directly. See 'Dispatcher'. */
+  public async _resolveConflictsWithCopilot(
+    repository: RepositoryWithGitHubRepository
+  ): Promise<ICopilotConflictResolutionResponse | null> {
+    if (!enableCopilotConflictResolution()) {
+      return null
+    }
+
+    try {
+      const state = this.repositoryStateCache.get(repository)
+      const { conflictState } = state.changesState
+
+      if (conflictState === null || !isMergeConflictState(conflictState)) {
+        return null
+      }
+
+      const conflictedFiles = getConflictedFiles(
+        state.changesState.workingDirectory,
+        conflictState.manualResolutions
+      )
+
+      if (conflictedFiles.length === 0) {
+        return null
+      }
+
+      const context = await buildConflictContext(
+        conflictState,
+        repository.path,
+        conflictedFiles
+      )
+
+      const promptString = formatConflictContextForPrompt(context)
+
+      this.statsStore.recordCopilotConflictResolutionInvoked()
+
+      const result = await this.copilotStore.resolveConflicts(
+        promptString,
+        repository.path
+      )
+
+      this.statsStore.recordCopilotConflictResolutionSucceeded()
+      this.statsStore.recordCopilotConflictResolutionFilesResolved(
+        result.resolutions.length
+      )
+
+      return result
+    } catch (e) {
+      this.statsStore.recordCopilotConflictResolutionFailed()
+      log.warn('AppStore: Copilot conflict resolution failed', e)
+      return null
+    }
   }
 
   /**

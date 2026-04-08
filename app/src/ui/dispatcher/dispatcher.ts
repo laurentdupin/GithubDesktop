@@ -127,6 +127,7 @@ import { ICustomIntegration } from '../../lib/custom-integration'
 import { isAbsolute } from 'path'
 import { CLIAction } from '../../lib/cli-action'
 import { BypassReasonType } from '../secret-scanning/bypass-push-protection-dialog'
+import { ICopilotConflictResolutionResponse } from '../../lib/copilot-conflict-resolution'
 
 /**
  * An error handler function.
@@ -1102,6 +1103,15 @@ export class Dispatcher {
     filesSelected: ReadonlyArray<WorkingDirectoryFileChange>
   ) {
     return this.appStore._generateCommitMessage(repository, filesSelected)
+  }
+
+  /**
+   * Use Copilot to analyze and suggest resolutions for merge conflicts.
+   */
+  public resolveConflictsWithCopilot(
+    repository: RepositoryWithGitHubRepository
+  ): Promise<ICopilotConflictResolutionResponse | null> {
+    return this.appStore._resolveConflictsWithCopilot(repository)
   }
 
   /** Remove the given account from the app. */
