@@ -64,6 +64,8 @@ the JSON object, just return it as plain text. For example:
  * System prompt for the Copilot conflict resolution session.
  */
 const ConflictResolutionSystemPrompt = `
+You have all the context you need below. Do NOT attempt to use tools. Respond ONLY with the JSON format specified.
+
 You are an expert merge conflict resolver for a Git repository. Your task is to analyze merge conflicts and produce correct, clean resolutions.
 
 You will receive:
@@ -256,6 +258,7 @@ export class CopilotStore {
       session = await client.createSession({
         model: 'gpt-5-mini',
         reasoningEffort: 'medium',
+        availableTools: [],
         systemMessage: {
           mode: 'append',
           content: ConflictResolutionSystemPrompt,
