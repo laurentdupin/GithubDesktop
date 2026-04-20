@@ -1,6 +1,7 @@
 import { IFileListFilterState } from '../../lib/app-state'
 import { IChangesListItem } from './filter-changes-list'
 import memoizeOne from 'memoize-one'
+import { isSyntheticSubmoduleChange } from '../../models/status'
 
 /**
  * Apply filter options to determine if a file should be shown
@@ -17,6 +18,13 @@ export function applyFilterOptions(
   }
 
   const { change } = item
+
+  if (
+    isSyntheticSubmoduleChange(change) &&
+    (filters.isIncludedInCommit || filters.isExcludedFromCommit)
+  ) {
+    return false
+  }
 
   if (filters.isIncludedInCommit && !change.isIncludedInCommit()) {
     return false

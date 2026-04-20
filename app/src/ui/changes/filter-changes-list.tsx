@@ -9,6 +9,7 @@ import {
   WorkingDirectoryStatus,
   WorkingDirectoryFileChange,
   AppFileStatusKind,
+  isSyntheticSubmoduleChange,
 } from '../../models/status'
 import { DiffSelectionType } from '../../models/diff'
 import { CommitIdentity } from '../../models/commit-identity'
@@ -50,7 +51,11 @@ import * as octicons from '../octicons/octicons.generated'
 import { IStashEntry } from '../../models/stash-entry'
 import classNames from 'classnames'
 import { hasWritePermission } from '../../models/github-repository'
-import { hasConflictedFiles } from '../../lib/status'
+import {
+  getParentRepositoryWorkingDirectoryFiles,
+  hasConflictedFiles,
+  hasDirtySubmoduleWorkingDirectoryChanges,
+} from '../../lib/status'
 import { createObservableRef } from '../lib/observable-ref'
 import { Popup, PopupType } from '../../models/popup'
 import { EOL } from 'os'
@@ -393,6 +398,22 @@ export class FilterChangesList extends React.Component<
     }
   }
 
+  private getCommitCandidateFiles = (
+    files: ReadonlyArray<WorkingDirectoryFileChange>
+  ) => files.filter(f => !isSyntheticSubmoduleChange(f))
+
+  private getFilesSelectedForCommit = (
+    files: ReadonlyArray<WorkingDirectoryFileChange>
+  ) =>
+    this.getCommitCandidateFiles(files).filter(
+      f => f.selection.getSelectionType() !== DiffSelectionType.None
+    )
+
+  private getAutoCommittedSubmoduleCount = (
+    files: ReadonlyArray<WorkingDirectoryFileChange>
+  ) =>
+    files.filter(file => hasDirtySubmoduleWorkingDirectoryChanges(file)).length
+
   private createListItems(
     files: ReadonlyArray<WorkingDirectoryFileChange>
   ): IFilterListGroup<IChangesListItem> {
@@ -410,9 +431,11 @@ export class FilterChangesList extends React.Component<
 
   private onIncludeAllChanged = (event: React.FormEvent<HTMLInputElement>) => {
     const include = event.currentTarget.checked
-    const filteredItemPaths = Array.from(
+    const filteredItemPaths = this.getCommitCandidateFiles(
+      Array.from(
       this.state.filteredItems,
       ([, v]) => v.change
+      )
     )
     this.props.onIncludeChanged(filteredItemPaths, include)
   }
@@ -430,18 +453,7 @@ export class FilterChangesList extends React.Component<
 
     const file = changeListItem.change
     const selection = file.selection.getSelectionType()
-    const { submoduleStatus } = file.status
-
-    const isUncommittableSubmodule =
-      submoduleStatus !== undefined &&
-      file.status.kind === AppFileStatusKind.Modified &&
-      !submoduleStatus.commitChanged
-
-    const isPartiallyCommittableSubmodule =
-      submoduleStatus !== undefined &&
-      (submoduleStatus.commitChanged ||
-        file.status.kind === AppFileStatusKind.New) &&
-      (submoduleStatus.modifiedChanges || submoduleStatus.untrackedChanges)
+    const syntheticSubmoduleChange = isSyntheticSubmoduleChange(file)
 
     const includeAll =
       selection === DiffSelectionType.All
@@ -450,29 +462,29 @@ export class FilterChangesList extends React.Component<
         ? false
         : null
 
-    const include = isUncommittableSubmodule
-      ? false
-      : rebaseConflictState !== null
+    const include = rebaseConflictState !== null
       ? file.status.kind !== AppFileStatusKind.Untracked
       : includeAll
 
     const disableSelection =
-      isCommitting || rebaseConflictState !== null || isUncommittableSubmodule
+      isCommitting || rebaseConflictState !== null || syntheticSubmoduleChange
 
-    const checkboxTooltip = isUncommittableSubmodule
-      ? 'This submodule change cannot be added to a commit in this repository because it contains changes that have not been committed.'
-      : isPartiallyCommittableSubmodule
-      ? 'Only changes that have been committed within the submodule will be added to this repository. You need to commit any other modified or untracked changes in the submodule before including them in this repository.'
+    const checkboxTooltip = syntheticSubmoduleChange
+      ? 'This file lives inside a submodule. It will be committed automatically when the parent submodule change is included in the commit.'
       : undefined
 
     return (
       <ChangedFile
         file={file}
-        include={isPartiallyCommittableSubmodule && include ? null : include}
+        include={include}
         key={file.id}
         onIncludeChanged={onIncludeChanged}
         availableWidth={availableWidth}
         disableSelection={disableSelection}
+        showCheckbox={!syntheticSubmoduleChange}
+        className={
+          syntheticSubmoduleChange ? 'synthetic-submodule-change' : undefined
+        }
         checkboxTooltip={checkboxTooltip}
         focused={this.state.focusedRow === changeListItem.id}
         matches={matches}
@@ -481,8 +493,11 @@ export class FilterChangesList extends React.Component<
   }
 
   private onDiscardAllChanges = () => {
+    const discardableFiles = this.getCommitCandidateFiles(
+      this.props.workingDirectory.files
+    )
     this.props.onDiscardChangesFromFiles(
-      this.props.workingDirectory.files,
+      discardableFiles,
       true
     )
   }
@@ -660,9 +675,32 @@ export class FilterChangesList extends React.Component<
     }
   }
 
+  private getSyntheticSubmoduleContextMenu(
+    file: WorkingDirectoryFileChange
+  ): ReadonlyArray<IMenuItem> {
+    const enabled = file.status.kind !== AppFileStatusKind.Deleted
+
+    return [
+      this.getCopyPathMenuItem(file),
+      this.getCopyRelativePathMenuItem(file),
+      { type: 'separator' },
+      this.getRevealInFileManagerMenuItem(file),
+      this.getOpenInExternalEditorMenuItem(file, enabled),
+      {
+        label: OpenWithDefaultProgramLabel,
+        action: () => this.props.onOpenItem(file.path),
+        enabled: enabled && isSafeFileExtension(Path.extname(file.path)),
+      },
+    ]
+  }
+
   private getDefaultContextMenu(
     file: WorkingDirectoryFileChange
   ): ReadonlyArray<IMenuItem> {
+    if (isSyntheticSubmoduleChange(file)) {
+      return this.getSyntheticSubmoduleContextMenu(file)
+    }
+
     const { id, path, status } = file
 
     const extension = Path.extname(path)
@@ -676,7 +714,7 @@ export class FilterChangesList extends React.Component<
 
     const addItemToArray = (fileID: string) => {
       const newFile = workingDirectory.findFileWithID(fileID)
-      if (newFile) {
+      if (newFile && !isSyntheticSubmoduleChange(newFile)) {
         selectedFiles.push(newFile)
         paths.push(newFile.path)
 
@@ -811,6 +849,10 @@ export class FilterChangesList extends React.Component<
   private getRebaseContextMenu(
     file: WorkingDirectoryFileChange
   ): ReadonlyArray<IMenuItem> {
+    if (isSyntheticSubmoduleChange(file)) {
+      return this.getSyntheticSubmoduleContextMenu(file)
+    }
+
     const { path, status } = file
 
     const extension = Path.extname(path)
@@ -909,7 +951,9 @@ export class FilterChangesList extends React.Component<
     } = this.props
 
     if (rebaseConflictState !== null) {
-      const hasUntrackedChanges = workingDirectory.files.some(
+      const hasUntrackedChanges = this.getCommitCandidateFiles(
+        workingDirectory.files
+      ).some(
         f => f.status.kind === AppFileStatusKind.Untracked
       )
 
@@ -925,14 +969,17 @@ export class FilterChangesList extends React.Component<
       )
     }
 
-    const fileCount = workingDirectory.files.length
+    const parentRepositoryFiles = this.getCommitCandidateFiles(
+      workingDirectory.files
+    )
+    const fileCount = parentRepositoryFiles.length
 
     // Files selected to commit (to be committed) (not selected to see in diff)
-    const filesSelected = workingDirectory.files.filter(
-      f => f.selection.getSelectionType() !== DiffSelectionType.None
-    )
+    const filesSelected = this.getFilesSelectedForCommit(workingDirectory.files)
 
     const anyFilesSelected = filesSelected.length > 0
+    const autoCommitSubmoduleCount =
+      this.getAutoCommittedSubmoduleCount(filesSelected)
 
     // When a single file is selected, we use a default commit summary
     // based on the file name and change status.
@@ -971,6 +1018,7 @@ export class FilterChangesList extends React.Component<
         anyFilesAvailable={fileCount > 0}
         filesSelected={filesSelected}
         filesToBeCommittedCount={filesSelected.length}
+        autoCommitSubmoduleCount={autoCommitSubmoduleCount}
         repository={repository}
         repositoryAccount={repositoryAccount}
         commitMessage={this.props.commitMessage}
@@ -1394,10 +1442,10 @@ export class FilterChangesList extends React.Component<
   }
 
   private renderHiddenChangesWarning = () => {
-    const { files } = this.props.workingDirectory
-    const filesSelected = files.filter(
-      f => f.selection.getSelectionType() !== DiffSelectionType.None
+    const files = getParentRepositoryWorkingDirectoryFiles(
+      this.props.workingDirectory
     )
+    const filesSelected = this.getFilesSelectedForCommit(files)
 
     if (
       !isCommittingFileHiddenByFilter(

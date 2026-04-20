@@ -12,6 +12,63 @@ import {
 import { AuthenticationErrors } from './authentication'
 import { IRemote } from '../../models/remote'
 import { Progress } from '../../models/progress'
+import { getStatus } from './status'
+import { getRemotes } from './remote'
+import { getAheadBehind, revSymmetricDifference } from './rev-list'
+
+export type SubmodulePushContext = {
+  readonly path: string
+  readonly repository: Repository
+  readonly remote: IRemote
+  readonly branchName: string
+  readonly remoteBranchName: string | null
+}
+
+function findDefaultRemote(remotes: ReadonlyArray<IRemote>): IRemote | null {
+  return remotes.find(r => r.name === 'origin') || remotes[0] || null
+}
+
+function parseUpstreamRef(
+  upstreamRef: string
+): { remoteName: string; branchName: string } | null {
+  const separatorIndex = upstreamRef.indexOf('/')
+  if (separatorIndex === -1) {
+    return null
+  }
+
+  return {
+    remoteName: upstreamRef.slice(0, separatorIndex),
+    branchName: upstreamRef.slice(separatorIndex + 1),
+  }
+}
+
+function createSubmoduleRepository(path: string) {
+  return new Repository(path, -1, null, false)
+}
+
+async function shouldPushSubmodule(
+  repository: Repository,
+  currentBranch: string,
+  remote: IRemote,
+  remoteBranchName: string | null,
+  branchAheadBehind: { ahead: number; behind: number } | undefined
+) {
+  if (branchAheadBehind !== undefined) {
+    return branchAheadBehind.ahead > 0
+  }
+
+  const remoteBranchRef =
+    remoteBranchName === null
+      ? `${remote.name}/${currentBranch}`
+      : `${remote.name}/${remoteBranchName}`
+
+  const aheadBehind = await getAheadBehind(
+    repository,
+    revSymmetricDifference(currentBranch, remoteBranchRef)
+  )
+
+  return aheadBehind === null || aheadBehind.ahead > 0
+}
 
 /**
  * Update submodules after a git operation.
@@ -179,6 +236,71 @@ export async function listSubmodules(
   }
 
   return submodules
+}
+
+export async function getSubmodulesToPush(
+  repository: Repository
+): Promise<ReadonlyArray<SubmodulePushContext>> {
+  const submodules = await listSubmodules(repository)
+  const pushableSubmodules = new Array<SubmodulePushContext>()
+
+  for (const submodule of submodules) {
+    const submoduleRepositoryPath = Path.join(repository.path, submodule.path)
+
+    if (!(await pathExists(Path.join(submoduleRepositoryPath, '.git')))) {
+      continue
+    }
+
+    const submoduleRepository = createSubmoduleRepository(submoduleRepositoryPath)
+    const status = await getStatus(submoduleRepository)
+
+    if (status === null || status.currentBranch === undefined) {
+      continue
+    }
+
+    const remotes = await getRemotes(submoduleRepository)
+    let remote: IRemote | null = null
+    let remoteBranchName: string | null = null
+
+    if (status.currentUpstreamBranch !== undefined) {
+      const upstream = parseUpstreamRef(status.currentUpstreamBranch)
+
+      if (upstream === null) {
+        continue
+      }
+
+      remote = remotes.find(r => r.name === upstream.remoteName) ?? null
+      remoteBranchName = upstream.branchName
+    } else {
+      remote = findDefaultRemote(remotes)
+    }
+
+    if (remote === null) {
+      continue
+    }
+
+    if (
+      !(await shouldPushSubmodule(
+        submoduleRepository,
+        status.currentBranch,
+        remote,
+        remoteBranchName,
+        status.branchAheadBehind
+      ))
+    ) {
+      continue
+    }
+
+    pushableSubmodules.push({
+      path: submodule.path,
+      repository: submoduleRepository,
+      remote,
+      branchName: status.currentBranch,
+      remoteBranchName,
+    })
+  }
+
+  return pushableSubmodules
 }
 
 export async function resetSubmodulePaths(

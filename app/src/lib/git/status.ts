@@ -333,14 +333,7 @@ function buildStatusMap(
     entry.oldPath
   )
 
-  const initialSelectionType =
-    appStatus.kind === AppFileStatusKind.Modified &&
-    appStatus.submoduleStatus !== undefined &&
-    !appStatus.submoduleStatus.commitChanged
-      ? DiffSelectionType.None
-      : DiffSelectionType.All
-
-  const selection = DiffSelection.fromInitialSelection(initialSelectionType)
+  const selection = DiffSelection.fromInitialSelection(DiffSelectionType.All)
 
   files.set(
     entry.path,

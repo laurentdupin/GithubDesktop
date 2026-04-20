@@ -15,6 +15,8 @@ interface IChangedFileProps {
   readonly include: boolean | null
   readonly availableWidth: number
   readonly disableSelection: boolean
+  readonly showCheckbox?: boolean
+  readonly className?: string
   readonly checkboxTooltip?: string
   readonly focused: boolean
   /** The characters in the file path to highlight */
@@ -47,6 +49,8 @@ export class ChangedFile extends React.Component<IChangedFileProps, {}> {
       file,
       availableWidth,
       disableSelection,
+      showCheckbox = true,
+      className,
       checkboxTooltip,
       focused,
       matches,
@@ -62,7 +66,7 @@ export class ChangedFile extends React.Component<IChangedFileProps, {}> {
     const availablePathWidth =
       availableWidth -
       listItemPadding -
-      checkboxWidth -
+      (showCheckbox ? checkboxWidth : 0) -
       filePadding -
       statusWidth
 
@@ -78,22 +82,24 @@ export class ChangedFile extends React.Component<IChangedFileProps, {}> {
     )} ${includedText}`
 
     return (
-      <div className="file">
-        <TooltippedContent
-          tooltip={checkboxTooltip}
-          direction={TooltipDirection.EAST}
-          tagName="div"
-        >
-          <Checkbox
-            // The checkbox doesn't need to be tab reachable since we emulate
-            // checkbox behavior on the list item itself, ie hitting space bar
-            // while focused on a row will toggle selection.
-            tabIndex={-1}
-            value={this.checkboxValue}
-            onChange={this.handleCheckboxChange}
-            disabled={disableSelection}
-          />
-        </TooltippedContent>
+      <div className={`file ${className ?? ''}`.trim()}>
+        {showCheckbox && (
+          <TooltippedContent
+            tooltip={checkboxTooltip}
+            direction={TooltipDirection.EAST}
+            tagName="div"
+          >
+            <Checkbox
+              // The checkbox doesn't need to be tab reachable since we emulate
+              // checkbox behavior on the list item itself, ie hitting space bar
+              // while focused on a row will toggle selection.
+              tabIndex={-1}
+              value={this.checkboxValue}
+              onChange={this.handleCheckboxChange}
+              disabled={disableSelection}
+            />
+          </TooltippedContent>
+        )}
 
         <PathLabel
           path={path}

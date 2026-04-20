@@ -9,6 +9,7 @@ import {
   AppFileStatusKind,
   SubmoduleStatus,
   CommittedFileChange,
+  isSyntheticSubmoduleChange,
 } from '../../models/status'
 import {
   DiffType,
@@ -37,6 +38,7 @@ import { enableImagePreviewsForDDSFiles } from '../feature-flag'
 import { unstageAll } from './reset'
 import { stageFiles } from './update-index'
 import { isAbsolute } from 'path'
+import { toSubmoduleRepositoryChange } from './submodule-working-directory'
 
 /**
  * V8 has a limit on the size of string it can create (~256MB), and unless we want to
@@ -343,6 +345,15 @@ export async function getWorkingDirectoryDiff(
   file: WorkingDirectoryFileChange,
   hideWhitespaceInDiff: boolean = false
 ): Promise<IDiff> {
+  if (isSyntheticSubmoduleChange(file)) {
+    const submoduleChange = toSubmoduleRepositoryChange(file)
+    return getWorkingDirectoryDiff(
+      submoduleChange.repository,
+      submoduleChange.file,
+      hideWhitespaceInDiff
+    )
+  }
+
   // `--no-ext-diff` should be provided wherever we invoke `git diff` so that any
   // diff.external program configured by the user is ignored
   const args = [

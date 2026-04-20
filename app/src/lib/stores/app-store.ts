@@ -207,7 +207,12 @@ import {
   getGlobalConfigPath,
   getFilesDiffText,
   TerminalOutput,
+  TerminalOutputCallback,
   HookProgress,
+  SubmodulePushContext,
+  expandWorkingDirectoryWithSubmoduleChanges,
+  getSubmoduleRepositoryWorkingDirectory,
+  getSubmodulesToPush,
 } from '../git'
 import {
   installGlobalLFSFilters,
@@ -294,7 +299,11 @@ import {
   isValidTutorialStep,
 } from '../../models/tutorial-step'
 import { OnboardingTutorialAssessor } from './helpers/tutorial-assessor'
-import { getUntrackedFiles } from '../status'
+import {
+  getParentRepositoryWorkingDirectoryFiles,
+  getUntrackedFiles,
+  hasDirtySubmoduleWorkingDirectoryChanges,
+} from '../status'
 import { isBranchPushable } from '../helpers/push-control'
 import {
   findAssociatedPullRequest,
@@ -2766,29 +2775,46 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return null
     }
 
+    const expandedWorkingDirectoryFiles =
+      await expandWorkingDirectoryWithSubmoduleChanges(
+        repository,
+        status.workingDirectory.files
+      )
+
+    const expandedStatus: IStatusResult = {
+      ...status,
+      workingDirectory: WorkingDirectoryStatus.fromFiles(
+        expandedWorkingDirectoryFiles
+      ),
+    }
+
     this.repositoryStateCache.updateChangesState(repository, state =>
-      updateChangedFiles(state, status, clearPartialState)
+      updateChangedFiles(state, expandedStatus, clearPartialState)
     )
 
     this.repositoryStateCache.updateChangesState(repository, state => ({
-      conflictState: updateConflictState(state, status, this.statsStore),
+      conflictState: updateConflictState(
+        state,
+        expandedStatus,
+        this.statsStore
+      ),
     }))
 
     this.updateMultiCommitOperationConflictsIfFound(repository)
     await this.initializeMultiCommitOperationIfConflictsFound(
       repository,
-      status
+      expandedStatus
     )
 
     if (this.selectedRepository === repository) {
-      this._triggerConflictsFlow(repository, status)
+      this._triggerConflictsFlow(repository, expandedStatus)
     }
 
     this.emitUpdate()
 
     this.updateChangesWorkingDirectoryDiff(repository)
 
-    return status
+    return expandedStatus
   }
 
   /**
@@ -3420,7 +3446,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
     context: ICommitContext
   ): Promise<boolean> {
     const state = this.repositoryStateCache.get(repository)
-    const files = state.changesState.workingDirectory.files
+    const files = getParentRepositoryWorkingDirectoryFiles(
+      state.changesState.workingDirectory
+    )
     const selectedFiles = files.filter(file => {
       return file.selection.getSelectionType() !== DiffSelectionType.None
     })
@@ -3432,11 +3460,14 @@ export class AppStore extends TypedBaseStore<IAppState> {
         async () => {
           const message = await formatCommitMessage(repository, context)
           let aborted = false
-          return createCommit(repository, message, selectedFiles, {
-            amend: context.amend,
+          const commitOptions = {
             onHookProgress: this.onHookProgress(repository),
             onHookFailure: this.onHookFailure(() => (aborted = true)),
-            onTerminalOutputAvailable: subscribeToCommitOutput => {
+            onTerminalOutputAvailable: (
+              subscribeToCommitOutput: NonNullable<
+                IRepositoryState['subscribeToCommitOutput']
+              >
+            ) => {
               this.repositoryStateCache.update(repository, state => ({
                 ...state,
                 subscribeToCommitOutput,
@@ -3444,6 +3475,23 @@ export class AppStore extends TypedBaseStore<IAppState> {
             },
             noVerify: state.skipCommitHooks,
             signOff: state.signOffCommits,
+          }
+
+          const submoduleCommitsSucceeded =
+            await this.commitSelectedSubmoduleChanges(
+              repository,
+              selectedFiles,
+              message,
+              commitOptions
+            ).catch(err => (aborted ? false : Promise.reject(err)))
+
+          if (!submoduleCommitsSucceeded) {
+            return undefined
+          }
+
+          return createCommit(repository, message, selectedFiles, {
+            amend: context.amend,
+            ...commitOptions,
             allowEmpty: state.allowEmptyCommit,
           }).catch(err => (aborted ? undefined : Promise.reject(err)))
         },
@@ -3494,6 +3542,55 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
       return result !== undefined
     })
+  }
+
+  private async commitSelectedSubmoduleChanges(
+    repository: Repository,
+    selectedFiles: ReadonlyArray<WorkingDirectoryFileChange>,
+    message: string,
+    commitOptions: {
+      onHookProgress: ReturnType<AppStore['onHookProgress']>
+      onHookFailure: ReturnType<AppStore['onHookFailure']>
+      onTerminalOutputAvailable: TerminalOutputCallback
+      noVerify: boolean
+      signOff: boolean
+    }
+  ): Promise<boolean> {
+    for (const file of selectedFiles) {
+      if (!hasDirtySubmoduleWorkingDirectoryChanges(file)) {
+        continue
+      }
+
+      const submoduleWorkingDirectory =
+        await getSubmoduleRepositoryWorkingDirectory(repository, file.path)
+
+      if (submoduleWorkingDirectory === null) {
+        continue
+      }
+
+      const submoduleFiles = getParentRepositoryWorkingDirectoryFiles(
+        WorkingDirectoryStatus.fromFiles(submoduleWorkingDirectory.files)
+      )
+
+      if (submoduleFiles.length === 0) {
+        continue
+      }
+
+      await createCommit(
+        submoduleWorkingDirectory.repository,
+        message,
+        submoduleFiles,
+        {
+          onHookProgress: commitOptions.onHookProgress,
+          onHookFailure: commitOptions.onHookFailure,
+          onTerminalOutputAvailable: commitOptions.onTerminalOutputAvailable,
+          noVerify: commitOptions.noVerify,
+          signOff: commitOptions.signOff,
+        }
+      )
+    }
+
+    return true
   }
 
   private async _refreshRepositoryAfterCommit(
@@ -4805,6 +4902,70 @@ export class AppStore extends TypedBaseStore<IAppState> {
     return
   }
 
+  private createSubmodulePushError(path: string, error: unknown) {
+    const suffix =
+      error instanceof Error && error.message.length > 0
+        ? ` ${error.message}`
+        : ''
+
+    return new Error(`Unable to push submodule "${path}".${suffix}`)
+  }
+
+  private async pushSubmodulesBeforeParentPush(
+    repository: Repository,
+    submodulesToPush: ReadonlyArray<SubmodulePushContext>,
+    options: PushOptions | undefined,
+    progressValueWeight: number
+  ) {
+    if (submodulesToPush.length === 0) {
+      return true
+    }
+
+    const progressPerSubmodule = progressValueWeight / submodulesToPush.length
+    let aborted = false
+
+    for (const [index, submodule] of submodulesToPush.entries()) {
+      const progressOffset = progressPerSubmodule * index
+      const pushTitle = `Pushing submodule ${submodule.path}`
+
+      await pushRepo(
+        submodule.repository,
+        submodule.remote,
+        submodule.branchName,
+        submodule.remoteBranchName,
+        null,
+        {
+          noVerify: options?.noVerify,
+          onHookFailure: this.onHookFailure(() => (aborted = true)),
+        },
+        progress => {
+          this.updatePushPullFetchProgress(repository, {
+            ...progress,
+            title: pushTitle,
+            value: progressOffset + progressPerSubmodule * progress.value,
+          })
+        }
+      ).catch(err =>
+        aborted
+          ? undefined
+          : Promise.reject(this.createSubmodulePushError(submodule.path, err))
+      )
+
+      if (aborted) {
+        return false
+      }
+
+      this.updatePushPullFetchProgress(repository, {
+        kind: 'generic',
+        title: pushTitle,
+        description: 'Submodule pushed',
+        value: progressOffset + progressPerSubmodule,
+      })
+    }
+
+    return true
+  }
+
   private async performPush(
     repository: Repository,
     options?: PushOptions
@@ -4841,8 +5002,11 @@ export class AppStore extends TypedBaseStore<IAppState> {
         branch: branch.name,
       })
 
+      const submodulesToPush = await getSubmodulesToPush(repository)
+
       // Let's say that a push takes roughly twice as long as a fetch,
       // this is of course highly inaccurate.
+      let submodulePushWeight = submodulesToPush.length > 0 ? 1.25 : 0
       let pushWeight = 2.5
       let fetchWeight = 1
 
@@ -4850,8 +5014,11 @@ export class AppStore extends TypedBaseStore<IAppState> {
       const refreshWeight = 0.1
 
       // Scale pull and fetch weights to be between 0 and 0.9.
-      const scale = (1 / (pushWeight + fetchWeight)) * (1 - refreshWeight)
+      const scale =
+        (1 / (submodulePushWeight + pushWeight + fetchWeight)) *
+        (1 - refreshWeight)
 
+      submodulePushWeight *= scale
       pushWeight *= scale
       fetchWeight *= scale
 
@@ -4901,6 +5068,18 @@ export class AppStore extends TypedBaseStore<IAppState> {
       const gitStore = this.gitStoreCache.get(repository)
       await gitStore.performFailableOperation(
         async () => {
+          const submodulePushesSucceeded =
+            await this.pushSubmodulesBeforeParentPush(
+              repository,
+              submodulesToPush,
+              options,
+              submodulePushWeight
+            )
+
+          if (!submodulePushesSucceeded) {
+            return
+          }
+
           let aborted = false
           await pushRepo(
             repository,
@@ -4916,7 +5095,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
               this.updatePushPullFetchProgress(repository, {
                 ...progress,
                 title: pushTitle,
-                value: pushWeight * progress.value,
+                value: submodulePushWeight + pushWeight * progress.value,
               })
             }
           ).catch(err => (aborted ? undefined : Promise.reject(err)))
@@ -4930,14 +5109,18 @@ export class AppStore extends TypedBaseStore<IAppState> {
           await gitStore.fetchRemotes([safeRemote], false, fetchProgress => {
             this.updatePushPullFetchProgress(repository, {
               ...fetchProgress,
-              value: pushWeight + fetchProgress.value * fetchWeight,
+              value:
+                submodulePushWeight +
+                pushWeight +
+                fetchProgress.value * fetchWeight,
             })
           })
 
           const refreshTitle = __DARWIN__
             ? 'Refreshing Repository'
             : 'Refreshing repository'
-          const refreshStartProgress = pushWeight + fetchWeight
+          const refreshStartProgress =
+            submodulePushWeight + pushWeight + fetchWeight
 
           this.updatePushPullFetchProgress(repository, {
             kind: 'generic',

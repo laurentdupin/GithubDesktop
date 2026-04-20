@@ -94,6 +94,7 @@ interface ICommitMessageProps {
   readonly commitAuthor: CommitIdentity | null
   readonly anyFilesSelected: boolean
   readonly filesToBeCommittedCount?: number
+  readonly autoCommitSubmoduleCount?: number
   /** Whether the user can see all the files to commit in the changes list. They
    * may not be able to if the list is filtered */
   readonly showPromptForCommittingFileHiddenByFilter?: boolean
@@ -1231,6 +1232,29 @@ export class CommitMessage extends React.Component<
     }
   }
 
+  private renderSubmoduleCommitWarning() {
+    const { autoCommitSubmoduleCount, repository } = this.props
+
+    if (autoCommitSubmoduleCount === undefined || autoCommitSubmoduleCount < 1) {
+      return null
+    }
+
+    const pluralizedSubmodule =
+      autoCommitSubmoduleCount === 1 ? 'submodule' : 'submodules'
+
+    return (
+      <CommitWarning icon={CommitWarningIcon.Information}>
+        This commit will also create local commits in{' '}
+        <strong>
+          {autoCommitSubmoduleCount} {pluralizedSubmodule}
+        </strong>
+        . When you push <strong>{repository.name}</strong>, Desktop will try to
+        push those submodule commits too. You may still need push access to the
+        submodule repositories.
+      </CommitWarning>
+    )
+  }
+
   private renderBranchProtectionsRepoRulesCommitWarning() {
     const {
       showNoWriteAccess,
@@ -1806,6 +1830,7 @@ export class CommitMessage extends React.Component<
         {this.renderCoAuthorInput()}
 
         {this.renderAmendCommitNotice()}
+        {this.renderSubmoduleCommitWarning()}
         {this.renderBranchProtectionsRepoRulesCommitWarning()}
 
         {this.renderSubmitButton()}

@@ -7,6 +7,7 @@ import {
   GitStatusEntry,
   isConflictedFileStatus,
   WorkingDirectoryFileChange,
+  isSyntheticSubmoduleChange,
 } from '../models/status'
 import { assertNever } from './fatal-error'
 import { ManualConflictResolution } from '../models/manual-conflict-resolution'
@@ -170,4 +171,20 @@ export function getConflictedFiles(
       isConflictedFileStatus(f.status) &&
       hasUnresolvedConflicts(f.status, manualResolutions.get(f.path))
   )
+}
+
+export function hasDirtySubmoduleWorkingDirectoryChanges(
+  file: WorkingDirectoryFileChange
+) {
+  const submoduleStatus = file.status.submoduleStatus
+  return (
+    submoduleStatus !== undefined &&
+    (submoduleStatus.modifiedChanges || submoduleStatus.untrackedChanges)
+  )
+}
+
+export function getParentRepositoryWorkingDirectoryFiles(
+  status: WorkingDirectoryStatus
+): ReadonlyArray<WorkingDirectoryFileChange> {
+  return status.files.filter(f => !isSyntheticSubmoduleChange(f))
 }

@@ -21,6 +21,7 @@ import {
 } from '../autocompletion'
 import { ClickSource } from '../lib/list'
 import { WorkingDirectoryFileChange } from '../../models/status'
+import { isSyntheticSubmoduleChange } from '../../models/status'
 import { TransitionGroup, CSSTransition } from 'react-transition-group'
 import { openFile } from '../lib/open-file'
 import { Account } from '../../models/account'
@@ -310,6 +311,10 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
 
     if (!file) {
       console.error('keyboard selection toggle despite no file - what?')
+      return
+    }
+
+    if (isSyntheticSubmoduleChange(file)) {
       return
     }
 

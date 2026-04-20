@@ -2,13 +2,15 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert'
 import * as path from 'path'
 import { readFile, writeFile } from 'fs/promises'
+import { exec } from 'dugite'
 
 import { Repository } from '../../../src/models/repository'
 import {
+  getSubmodulesToPush,
   listSubmodules,
   resetSubmodulePaths,
 } from '../../../src/lib/git/submodule'
-import { checkoutBranch, getBranches } from '../../../src/lib/git'
+import { checkoutBranch, getBranches, getStatus } from '../../../src/lib/git'
 import { setupFixtureRepository } from '../../helpers/repositories'
 
 describe('git/submodule', () => {
@@ -102,6 +104,49 @@ describe('git/submodule', () => {
 
       const result = await readFile(filePath, { encoding: 'utf8' })
       assert.equal(result, '# submodule-test-case')
+    })
+  })
+
+  describe('getSubmodulesToPush', () => {
+    it('returns no submodules when the submodule branch has no unpublished commits', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+
+      const result = await getSubmodulesToPush(repository)
+      assert.equal(result.length, 0)
+    })
+
+    it('returns a submodule when it has unpublished commits', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+      const submoduleRepository = new Repository(submodulePath, -1, null, false)
+
+      await writeFile(path.join(submodulePath, 'README.md'), 'changed', {
+        encoding: 'utf8',
+      })
+      await exec(['commit', '-am', 'update submodule'], submodulePath)
+
+      const submoduleStatus = await getStatus(submoduleRepository)
+      assert(submoduleStatus !== null)
+      assert(submoduleStatus.currentBranch !== undefined)
+
+      const result = await getSubmodulesToPush(repository)
+      assert.equal(result.length, 1)
+      assert.equal(result[0].path, 'foo/submodule')
+      assert.equal(result[0].repository.path, submodulePath)
+      assert.equal(result[0].branchName, submoduleStatus.currentBranch)
+      assert.equal(result[0].remote.name, 'origin')
+      assert.equal(
+        result[0].remoteBranchName,
+        submoduleStatus.currentBranch
+      )
     })
   })
 })

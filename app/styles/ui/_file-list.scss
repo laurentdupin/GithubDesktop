@@ -49,5 +49,13 @@
       background-color: inherit;
       color: var(--text-color);
     }
+
+    &.synthetic-submodule-change {
+      color: var(--text-secondary-color);
+
+      .path-label-component {
+        margin-left: calc(var(--spacing) + 4px);
+      }
+    }
   }
 }

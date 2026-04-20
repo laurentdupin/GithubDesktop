@@ -125,6 +125,21 @@ export type SubmoduleStatus = {
   readonly untrackedChanges: boolean
 }
 
+/** Metadata for a working directory change that belongs to a submodule repo. */
+export type SubmoduleChange = {
+  /** The path of the submodule within the parent repository. */
+  readonly submodulePath: string
+  /** The absolute path to the submodule repository on disk. */
+  readonly submoduleRepositoryPath: string
+  /** The path of the changed file within the submodule repository. */
+  readonly pathInSubmodule: string
+  /**
+   * The original path of the changed file within the submodule repository.
+   * Only present for renamed/copied files.
+   */
+  readonly oldPathInSubmodule?: string
+}
+
 /** The porcelain status for an ordinary changed entry */
 type OrdinaryEntry = {
   readonly kind: 'ordinary'
@@ -302,7 +317,8 @@ export class WorkingDirectoryFileChange extends FileChange {
   public constructor(
     path: string,
     status: AppFileStatus,
-    public readonly selection: DiffSelection
+    public readonly selection: DiffSelection,
+    public readonly submoduleChange: SubmoduleChange | null = null
   ) {
     super(path, status)
   }
@@ -318,7 +334,12 @@ export class WorkingDirectoryFileChange extends FileChange {
 
   /** Create a new WorkingDirectoryFileChange with the given diff selection. */
   public withSelection(selection: DiffSelection): WorkingDirectoryFileChange {
-    return new WorkingDirectoryFileChange(this.path, this.status, selection)
+    return new WorkingDirectoryFileChange(
+      this.path,
+      this.status,
+      selection,
+      this.submoduleChange
+    )
   }
 
   public isIncludedInCommit(): boolean {
@@ -328,6 +349,14 @@ export class WorkingDirectoryFileChange extends FileChange {
   public isExcludedFromCommit(): boolean {
     return this.selection.getSelectionType() === DiffSelectionType.None
   }
+}
+
+export function isSyntheticSubmoduleChange(
+  file: WorkingDirectoryFileChange
+): file is WorkingDirectoryFileChange & {
+  readonly submoduleChange: SubmoduleChange
+} {
+  return file.submoduleChange !== null
 }
 
 /**
@@ -379,7 +408,9 @@ export class WorkingDirectoryStatus {
    * Update the include state of all files in the working directory
    */
   public withIncludeAllFiles(includeAll: boolean): WorkingDirectoryStatus {
-    const newFiles = this.files.map(f => f.withIncludeAll(includeAll))
+    const newFiles = this.files.map(f =>
+      isSyntheticSubmoduleChange(f) ? f : f.withIncludeAll(includeAll)
+    )
     return new WorkingDirectoryStatus(newFiles, includeAll)
   }
 
@@ -399,14 +430,16 @@ export class WorkingDirectoryStatus {
 function getIncludeAllState(
   files: ReadonlyArray<WorkingDirectoryFileChange>
 ): boolean | null {
-  if (!files.length) {
+  const commitCandidates = files.filter(f => !isSyntheticSubmoduleChange(f))
+
+  if (!commitCandidates.length) {
     return true
   }
 
-  const allSelected = files.every(
+  const allSelected = commitCandidates.every(
     f => f.selection.getSelectionType() === DiffSelectionType.All
   )
-  const noneSelected = files.every(
+  const noneSelected = commitCandidates.every(
     f => f.selection.getSelectionType() === DiffSelectionType.None
   )
 

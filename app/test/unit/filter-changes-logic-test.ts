@@ -194,6 +194,62 @@ describe('filter-changes-logic', () => {
         assert.equal(applyFilterOptions(excludedFile, filters), true)
         assert.equal(applyFilterOptions(includedFile, filters), false)
       })
+
+      it('should hide synthetic submodule rows from commit inclusion filters', () => {
+        const filters: IFileListFilterState = {
+          filterText: '',
+          isIncludedInCommit: false,
+          isExcludedFromCommit: true,
+          isNewFile: false,
+          isModifiedFile: false,
+          isDeletedFile: false,
+        }
+
+        const syntheticSubmoduleFile: IChangesListItem = {
+          id: 'foo/submodule/README.md',
+          text: ['foo/submodule/README.md'],
+          change: new WorkingDirectoryFileChange(
+            'foo/submodule/README.md',
+            { kind: AppFileStatusKind.Modified },
+            DiffSelection.fromInitialSelection(DiffSelectionType.None),
+            {
+              submodulePath: 'foo/submodule',
+              submoduleRepositoryPath: 'C:/submodule',
+              pathInSubmodule: 'README.md',
+            }
+          ),
+        }
+
+        assert.equal(applyFilterOptions(syntheticSubmoduleFile, filters), false)
+      })
+
+      it('should keep synthetic submodule rows visible for non-commit filters', () => {
+        const filters: IFileListFilterState = {
+          filterText: '',
+          isIncludedInCommit: false,
+          isExcludedFromCommit: false,
+          isNewFile: false,
+          isModifiedFile: true,
+          isDeletedFile: false,
+        }
+
+        const syntheticSubmoduleFile: IChangesListItem = {
+          id: 'foo/submodule/README.md',
+          text: ['foo/submodule/README.md'],
+          change: new WorkingDirectoryFileChange(
+            'foo/submodule/README.md',
+            { kind: AppFileStatusKind.Modified },
+            DiffSelection.fromInitialSelection(DiffSelectionType.None),
+            {
+              submodulePath: 'foo/submodule',
+              submoduleRepositoryPath: 'C:/submodule',
+              pathInSubmodule: 'README.md',
+            }
+          ),
+        }
+
+        assert.equal(applyFilterOptions(syntheticSubmoduleFile, filters), true)
+      })
     })
   })
 
