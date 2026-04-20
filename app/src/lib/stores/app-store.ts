@@ -82,6 +82,7 @@ import {
 import { Popup, PopupType } from '../../models/popup'
 import { themeChangeMonitor } from '../../ui/lib/theme-change-monitor'
 import { getAppPath } from '../../ui/lib/app-proxy'
+import { DetachedRepositoryBranchLabel } from '../repository-display-name'
 import {
   ApplicableTheme,
   ApplicationTheme,
@@ -3752,6 +3753,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
     lookup.set(repository.id, {
       aheadBehind: status.branchAheadBehind || null,
+      currentBranch:
+        status.currentBranch ??
+        (status.currentTip !== undefined ? DetachedRepositoryBranchLabel : null),
       changedFilesCount: status.workingDirectory.files.length,
     })
   }
@@ -3794,6 +3798,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
       const existing = lookup.get(repository.id)
       lookup.set(repository.id, {
         aheadBehind: aheadBehind,
+        currentBranch: existing?.currentBranch ?? null,
         // We don't need to update changedFilesCount here since it was already
         // set when calling `updateSidebarIndicator()` with the status object.
         changedFilesCount: existing?.changedFilesCount ?? 0,

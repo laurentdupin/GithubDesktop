@@ -189,6 +189,10 @@ import { ConfirmCommitFilteredChanges } from './changes/confirm-commit-filtered-
 import { AboutTestDialog } from './about/about-test-dialog'
 import { enableCopilotSdkCommitMessageGeneration } from '../lib/feature-flag'
 import {
+  DetachedRepositoryBranchLabel,
+  formatRepositoryDisplayName,
+} from '../lib/repository-display-name'
+import {
   ISecretScanResult,
   PushProtectionErrorDialog,
 } from './secret-scanning/push-protection-error-dialog'
@@ -3044,6 +3048,28 @@ export class App extends React.Component<IAppProps, IAppState> {
     }
   }
 
+  private getCurrentBranchLabelForSelection(
+    selection: IAppState['selectedState']
+  ): string | null {
+    if (selection === null || selection.type !== SelectionType.Repository) {
+      return null
+    }
+
+    const { tip } = selection.state.branchesState
+    switch (tip.kind) {
+      case TipState.Valid:
+        return tip.branch.name
+      case TipState.Unborn:
+        return tip.ref
+      case TipState.Detached:
+        return DetachedRepositoryBranchLabel
+      case TipState.Unknown:
+        return null
+      default:
+        return assertNever(tip, 'Unknown tip state')
+    }
+  }
+
   private renderRepositoryToolbarButton() {
     const selection = this.state.selectedState
 
@@ -3052,9 +3078,11 @@ export class App extends React.Component<IAppProps, IAppState> {
     let icon: OcticonSymbol
     let title: string
     if (repository) {
-      const alias = repository instanceof Repository ? repository.alias : null
       icon = iconForRepository(repository)
-      title = alias ?? repository.name
+      title = formatRepositoryDisplayName(
+        repository,
+        this.getCurrentBranchLabelForSelection(selection)
+      )
     } else if (this.state.repositories.length > 0) {
       icon = octicons.repo
       title = __DARWIN__ ? 'Select a Repository' : 'Select a repository'

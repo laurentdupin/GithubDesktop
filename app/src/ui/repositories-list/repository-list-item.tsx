@@ -12,6 +12,7 @@ import { createObservableRef } from '../lib/observable-ref'
 import { Tooltip } from '../lib/tooltip'
 import { enableAccessibleListToolTips } from '../../lib/feature-flag'
 import { TooltippedContent } from '../lib/tooltipped-content'
+import { formatRepositoryDisplayName } from '../../lib/repository-display-name'
 
 interface IRepositoryListItemProps {
   readonly repository: Repositoryish
@@ -24,6 +25,9 @@ interface IRepositoryListItemProps {
 
   /** Number of commits this local repo branch is behind or ahead of its remote branch */
   readonly aheadBehind: IAheadBehind | null
+
+  /** The current branch name for the repository, if known. */
+  readonly currentBranch: string | null
 
   /** Number of uncommitted changes */
   readonly changedFilesCount: number
@@ -38,21 +42,11 @@ export class RepositoryListItem extends React.Component<
 
   public render() {
     const repository = this.props.repository
-    const gitHubRepo =
-      repository instanceof Repository ? repository.gitHubRepository : null
     const hasChanges = this.props.changedFilesCount > 0
-
-    const alias: string | null =
-      repository instanceof Repository ? repository.alias : null
-
-    let prefix: string | null = null
-    if (this.props.needsDisambiguation && gitHubRepo) {
-      prefix = `${gitHubRepo.owner.login}/`
-    }
-
-    const classNameList = classNames('name', {
-      alias: alias !== null,
-    })
+    const title = formatRepositoryDisplayName(
+      repository,
+      this.props.currentBranch
+    )
 
     return (
       <div className="repository-list-item" ref={this.listItemRef}>
@@ -68,12 +62,8 @@ export class RepositoryListItem extends React.Component<
           symbol={iconForRepository(repository)}
         />
 
-        <div className={classNames(classNameList)}>
-          {prefix ? <span className="prefix">{prefix}</span> : null}
-          <HighlightText
-            text={alias ?? repository.name}
-            highlight={this.props.matches.title}
-          />
+        <div className={classNames('name')}>
+          <HighlightText text={title} highlight={this.props.matches.title} />
         </div>
 
         {repository instanceof Repository &&
@@ -87,15 +77,12 @@ export class RepositoryListItem extends React.Component<
 
   private renderTooltip() {
     const repo = this.props.repository
-    const gitHubRepo = repo instanceof Repository ? repo.gitHubRepository : null
-    const alias = repo instanceof Repository ? repo.alias : null
-    const realName = gitHubRepo ? gitHubRepo.fullName : repo.name
+    const title = formatRepositoryDisplayName(repo, this.props.currentBranch)
 
     return (
       <>
         <div>
-          <strong>{realName}</strong>
-          {alias && <> ({alias})</>}
+          <strong>{title}</strong>
         </div>
         <div>{repo.path}</div>
       </>
@@ -103,18 +90,29 @@ export class RepositoryListItem extends React.Component<
   }
 
   public shouldComponentUpdate(nextProps: IRepositoryListItemProps): boolean {
-    if (
-      nextProps.repository instanceof Repository &&
-      this.props.repository instanceof Repository
-    ) {
-      return (
-        nextProps.repository.id !== this.props.repository.id ||
-        nextProps.matches !== this.props.matches
-      )
-    } else {
-      return true
-    }
+    return (
+      nextProps.repository !== this.props.repository ||
+      nextProps.matches !== this.props.matches ||
+      nextProps.currentBranch !== this.props.currentBranch ||
+      nextProps.changedFilesCount !== this.props.changedFilesCount ||
+      !aheadBehindEquals(nextProps.aheadBehind, this.props.aheadBehind)
+    )
   }
+}
+
+const aheadBehindEquals = (
+  a: IAheadBehind | null,
+  b: IAheadBehind | null
+) => {
+  if (a === b) {
+    return true
+  }
+
+  if (a === null || b === null) {
+    return false
+  }
+
+  return a.ahead === b.ahead && a.behind === b.behind
 }
 
 const renderRepoIndicators: React.FunctionComponent<{

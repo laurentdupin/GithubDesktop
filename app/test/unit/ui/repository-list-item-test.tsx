@@ -16,6 +16,7 @@ import {
 
 const noMatches: IMatches = { title: [], subtitle: [] }
 const fixtureRepositoryPath = '/tmp/desktop-fixture'
+const fixtureDirectoryName = 'desktop-fixture'
 
 function createRepository(alias: string | null = null) {
   const owner = new Owner('octocat', 'https://api.github.com', 1)
@@ -39,14 +40,16 @@ describe('RepositoryListItem', () => {
     resetTestTimers()
   })
 
-  it('renders the repository name and status indicators', () => {
+  it('renders the repository display name and status indicators', () => {
     const repository = createRepository()
+    const currentBranch = 'main'
     const view = render(
       <RepositoryListItem
         repository={repository}
         needsDisambiguation={false}
         matches={noMatches}
         aheadBehind={{ ahead: 2, behind: 1 }}
+        currentBranch={currentBranch}
         changedFilesCount={3}
       />
     )
@@ -57,20 +60,25 @@ describe('RepositoryListItem', () => {
       '.change-indicator-wrapper'
     )
 
-    assert.equal(name?.textContent, 'desktop')
+    assert.equal(
+      name?.textContent,
+      `desktop - ${fixtureDirectoryName} - ${currentBranch}`
+    )
     assert.notEqual(aheadBehind, null)
     assert.notEqual(changeIndicator, null)
     assert.equal(aheadBehind?.querySelectorAll('svg').length, 2)
   })
 
-  it('renders owner prefix and alias when disambiguation is required', () => {
+  it('renders the repository display name when disambiguation is required', () => {
     const repository = createRepository('desktop-app')
+    const currentBranch = 'feature/labels'
     const view = render(
       <RepositoryListItem
         repository={repository}
         needsDisambiguation={true}
         matches={noMatches}
         aheadBehind={null}
+        currentBranch={currentBranch}
         changedFilesCount={0}
       />
     )
@@ -78,18 +86,23 @@ describe('RepositoryListItem', () => {
     const prefix = view.container.querySelector('.prefix')
     const name = view.container.querySelector('.name')
 
-    assert.equal(prefix?.textContent, 'octocat/')
-    assert.equal(name?.textContent, 'octocat/desktop-app')
+    assert.equal(prefix, null)
+    assert.equal(
+      name?.textContent,
+      `desktop-app (desktop) - ${fixtureDirectoryName} - ${currentBranch}`
+    )
   })
 
-  it('shows tooltip content for the repository full name, alias, and path', async () => {
+  it('shows tooltip content for the aliased repository display name and path', async () => {
     const repository = createRepository('desktop-app')
+    const currentBranch = 'feature/labels'
     const view = render(
       <RepositoryListItem
         repository={repository}
         needsDisambiguation={true}
         matches={noMatches}
         aheadBehind={null}
+        currentBranch={currentBranch}
         changedFilesCount={0}
       />
     )
@@ -107,8 +120,34 @@ describe('RepositoryListItem', () => {
     advanceTimersBy(400)
 
     await waitFor(() => {
-      assert.ok(screen.getByText('octocat/desktop', { selector: 'strong' }))
+      assert.ok(
+        screen.getByText(
+          `desktop-app (desktop) - ${fixtureDirectoryName} - ${currentBranch}`,
+          { selector: 'strong' }
+        )
+      )
       assert.ok(screen.getByText(fixtureRepositoryPath))
     })
+  })
+
+  it('omits the directory segment when it matches the repository name', () => {
+    const owner = new Owner('octocat', 'https://api.github.com', 1)
+    const gitHubRepository = new GitHubRepository('desktop', owner, 99)
+    const repository = new Repository('/tmp/desktop', 124, gitHubRepository, false)
+    const currentBranch = 'main'
+    const view = render(
+      <RepositoryListItem
+        repository={repository}
+        needsDisambiguation={false}
+        matches={noMatches}
+        aheadBehind={null}
+        currentBranch={currentBranch}
+        changedFilesCount={0}
+      />
+    )
+
+    const name = view.container.querySelector('.name')
+
+    assert.equal(name?.textContent, `desktop - ${currentBranch}`)
   })
 })

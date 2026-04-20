@@ -6,7 +6,6 @@ import {
   IRepositoryListItem,
   Repositoryish,
   RepositoryListGroup,
-  getGroupKey,
 } from './group-repositories'
 import { IFilterListGroup } from '../lib/filter-list'
 import { IMatches } from '../../lib/fuzzy-find'
@@ -19,13 +18,12 @@ import { showContextualMenu } from '../../lib/menu-item'
 import { IMenuItem } from '../../lib/menu-item'
 import { PopupType } from '../../models/popup'
 import { encodePathAsUrl } from '../../lib/path'
-import { TooltippedContent } from '../lib/tooltipped-content'
 import memoizeOne from 'memoize-one'
 import { KeyboardShortcut } from '../keyboard-shortcut/keyboard-shortcut'
 import { generateRepositoryListContextMenu } from '../repositories-list/repository-list-item-context-menu'
 import { SectionFilterList } from '../lib/section-filter-list'
-import { assertNever } from '../../lib/fatal-error'
 import { IAheadBehind } from '../../models/branch'
+import { formatRepositoryDisplayName } from '../../lib/repository-display-name'
 
 const BlankSlateImage = encodePathAsUrl(__dirname, 'static/empty-no-repo.svg')
 
@@ -161,6 +159,7 @@ export class RepositoriesList extends React.Component<
         needsDisambiguation={item.needsDisambiguation}
         matches={matches}
         aheadBehind={item.aheadBehind}
+        currentBranch={item.currentBranch}
         changedFilesCount={item.changedFilesCount}
       />
     )
@@ -192,8 +191,7 @@ export class RepositoriesList extends React.Component<
     const { repository, aheadBehind, changedFilesCount } = item
     const gitHubRepo =
       repository instanceof Repository ? repository.gitHubRepository : null
-    const alias = repository instanceof Repository ? repository.alias : null
-    const realName = gitHubRepo ? gitHubRepo.fullName : repository.name
+    const title = formatRepositoryDisplayName(repository, item.currentBranch)
     const aheadBehindTooltip = this.getAheadBehindTooltip(aheadBehind)
     const hasChanges = changedFilesCount > 0
     const uncommittedChangesTooltip = hasChanges
@@ -206,14 +204,19 @@ export class RepositoriesList extends React.Component<
     return (
       <div className="repository-list-item-tooltip list-item-tooltip">
         <div>
-          <div className="label">Full Name: </div>
-          {realName}
-          {alias && <> ({alias})</>}
+          <div className="label">Repository: </div>
+          {title}
         </div>
         <div>
           <div className="label">Path: </div>
           {repository.path}
         </div>
+        {gitHubRepo && (
+          <div>
+            <div className="label">GitHub: </div>
+            {gitHubRepo.fullName}
+          </div>
+        )}
         {aheadBehindTooltip && (
           <div>
             <div className="label">
@@ -236,37 +239,6 @@ export class RepositoriesList extends React.Component<
           </div>
         )}
       </div>
-    )
-  }
-
-  private getGroupLabel(group: RepositoryListGroup) {
-    const { kind } = group
-    if (kind === 'enterprise') {
-      return group.host
-    } else if (kind === 'other') {
-      return 'Other'
-    } else if (kind === 'dotcom') {
-      return group.owner.login
-    } else if (kind === 'recent') {
-      return 'Recent'
-    } else {
-      assertNever(kind, `Unknown repository group kind ${kind}`)
-    }
-  }
-
-  private renderGroupHeader = (group: RepositoryListGroup) => {
-    const label = this.getGroupLabel(group)
-
-    return (
-      <TooltippedContent
-        key={getGroupKey(group)}
-        className="filter-list-group-header"
-        tooltip={label}
-        onlyWhenOverflowed={true}
-        tagName="div"
-      >
-        {label}
-      </TooltippedContent>
     )
   }
 
@@ -304,15 +276,8 @@ export class RepositoriesList extends React.Component<
     showContextualMenu(items)
   }
 
-  private getItemAriaLabel = (item: IRepositoryListItem) => item.repository.name
-  private getGroupAriaLabelGetter =
-    (
-      groups: ReadonlyArray<
-        IFilterListGroup<IRepositoryListItem, RepositoryListGroup>
-      >
-    ) =>
-    (group: number) =>
-      this.getGroupLabel(groups[group].identifier)
+  private getItemAriaLabel = (item: IRepositoryListItem) =>
+    formatRepositoryDisplayName(item.repository, item.currentBranch)
 
   public render() {
     const groups = this.getRepositoryGroups(
@@ -339,7 +304,6 @@ export class RepositoriesList extends React.Component<
           onFilterTextChanged={this.props.onFilterTextChanged}
           renderItem={this.renderItem}
           renderRowFocusTooltip={this.renderRowFocusTooltip}
-          renderGroupHeader={this.renderGroupHeader}
           onItemClick={this.onItemClick}
           renderPostFilter={this.renderPostFilter}
           renderNoItems={this.renderNoItems}
@@ -349,7 +313,6 @@ export class RepositoriesList extends React.Component<
             filterText: this.props.filterText,
           }}
           onItemContextMenu={this.onItemContextMenu}
-          getGroupAriaLabel={this.getGroupAriaLabelGetter(groups)}
           getItemAriaLabel={this.getItemAriaLabel}
           onSelectionChanged={this.onSelectionChanged}
         />

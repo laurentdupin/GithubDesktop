@@ -28,31 +28,19 @@ describe('repository list grouping', () => {
 
   const cache = new Map<number, ILocalRepositoryState>()
 
-  it('groups repositories by owners/Enterprise/Other', () => {
+  it('returns one flat list of repositories', () => {
     const grouped = groupRepositories(repositories, cache, [])
-    assert.equal(grouped.length, 3)
+    assert.equal(grouped.length, 1)
+    assert.equal(grouped[0].identifier, 'all')
+    assert.equal(grouped[0].items.length, 3)
 
-    assert.equal(grouped[0].identifier.kind, 'dotcom')
-    assert.equal((grouped[0].identifier as any).owner.login, 'me')
-    assert.equal(grouped[0].items.length, 1)
-
-    let item = grouped[0].items[0]
-    assert.equal(item.repository.path, 'repo2')
-
-    assert.equal(grouped[1].identifier.kind, 'enterprise')
-    assert.equal(grouped[1].items.length, 1)
-
-    item = grouped[1].items[0]
-    assert.equal(item.repository.path, 'repo3')
-
-    assert.equal(grouped[2].identifier.kind, 'other')
-    assert.equal(grouped[2].items.length, 1)
-
-    item = grouped[2].items[0]
-    assert.equal(item.repository.path, 'repo1')
+    const items = grouped[0].items
+    assert.equal(items[0].repository.path, 'repo1')
+    assert.equal(items[1].repository.path, 'repo2')
+    assert.equal(items[2].repository.path, 'repo3')
   })
 
-  it('sorts repositories alphabetically within each group', () => {
+  it('sorts repositories alphabetically in the flat list', () => {
     const repoA = new Repository('a', 1, null, false)
     const repoB = new Repository(
       'b',
@@ -74,26 +62,18 @@ describe('repository list grouping', () => {
       cache,
       []
     )
-    assert.equal(grouped.length, 2)
+    assert.equal(grouped.length, 1)
+    assert.equal(grouped[0].identifier, 'all')
 
-    assert.equal(grouped[0].identifier.kind, 'dotcom')
-    assert.equal((grouped[0].identifier as any).owner.login, 'me')
-    assert.equal(grouped[0].items.length, 2)
-
-    let items = grouped[0].items
-    assert.equal(items[0].repository.path, 'b')
-    assert.equal(items[1].repository.path, 'd')
-
-    assert.equal(grouped[1].identifier.kind, 'other')
-    assert.equal(grouped[1].items.length, 3)
-
-    items = grouped[1].items
+    const items = grouped[0].items
     assert.equal(items[0].repository.path, 'a')
-    assert.equal(items[1].repository.path, 'c')
-    assert.equal(items[2].repository.path, 'z')
+    assert.equal(items[1].repository.path, 'b')
+    assert.equal(items[2].repository.path, 'c')
+    assert.equal(items[3].repository.path, 'd')
+    assert.equal(items[4].repository.path, 'z')
   })
 
-  it('only disambiguates Enterprise repositories', () => {
+  it('disambiguates duplicate repository names in the flat list', () => {
     const repoA = new Repository(
       'repo',
       1,
@@ -128,29 +108,20 @@ describe('repository list grouping', () => {
     )
 
     const grouped = groupRepositories([repoA, repoB, repoC, repoD], cache, [])
-    assert.equal(grouped.length, 3)
+    assert.equal(grouped.length, 1)
+    assert.equal(grouped[0].identifier, 'all')
+    assert.equal(grouped[0].items.length, 4)
 
-    assert.equal(grouped[0].identifier.kind, 'dotcom')
-    assert.equal((grouped[0].identifier as any).owner.login, 'user1')
-    assert.equal(grouped[0].items.length, 1)
+    assert.equal(grouped[0].items[0].text[0], 'enterprise-repo - unknown')
+    assert(grouped[0].items[0].needsDisambiguation)
 
-    assert.equal(grouped[1].identifier.kind, 'dotcom')
-    assert.equal((grouped[1].identifier as any).owner.login, 'user2')
-    assert.equal(grouped[1].items.length, 1)
+    assert.equal(grouped[0].items[1].text[0], 'enterprise-repo - unknown')
+    assert(grouped[0].items[1].needsDisambiguation)
 
-    assert.equal(grouped[2].identifier.kind, 'enterprise')
-    assert.equal(grouped[2].items.length, 2)
+    assert.equal(grouped[0].items[2].text[0], 'repo - unknown')
+    assert(grouped[0].items[2].needsDisambiguation)
 
-    assert.equal(grouped[0].items[0].text[0], 'repo')
-    assert(!grouped[0].items[0].needsDisambiguation)
-
-    assert.equal(grouped[1].items[0].text[0], 'repo')
-    assert(!grouped[1].items[0].needsDisambiguation)
-
-    assert.equal(grouped[2].items[0].text[0], 'enterprise-repo')
-    assert(grouped[2].items[0].needsDisambiguation)
-
-    assert.equal(grouped[2].items[1].text[0], 'enterprise-repo')
-    assert(grouped[2].items[1].needsDisambiguation)
+    assert.equal(grouped[0].items[3].text[0], 'repo - unknown')
+    assert(grouped[0].items[3].needsDisambiguation)
   })
 })

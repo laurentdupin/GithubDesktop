@@ -147,6 +147,11 @@ export interface ILocalRepositoryState {
    */
   readonly aheadBehind: IAheadBehind | null
   /**
+   * The current branch name for the repository, or `null` when it could not be
+   * determined.
+   */
+  readonly currentBranch: string | null
+  /**
    * The number of uncommitted changes currently in the repository.
    */
   readonly changedFilesCount: number
