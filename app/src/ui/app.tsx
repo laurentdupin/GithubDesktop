@@ -31,6 +31,7 @@ import {
   Repository,
   getGitHubHtmlUrl,
   getNonForkGitHubRepository,
+  isRepositoryWithForkedGitHubRepository,
   isRepositoryWithGitHubRepository,
 } from '../models/repository'
 import { Branch } from '../models/branch'
@@ -53,10 +54,17 @@ import {
   ToolbarDropdown,
   DropdownState,
   PushPullButton,
+  ToolbarButton,
+  ToolbarButtonStyle,
   BranchDropdown,
   RevertProgress,
 } from './toolbar'
-import { iconForRepository, OcticonSymbol } from './octicons'
+import {
+  iconForRepository,
+  Octicon,
+  OcticonSymbol,
+  syncClockwise,
+} from './octicons'
 import * as octicons from './octicons/octicons.generated'
 import {
   showCertificateTrustDialog,
@@ -115,6 +123,8 @@ import { TutorialStep, isValidTutorialStep } from '../models/tutorial-step'
 import { WorkflowPushRejectedDialog } from './workflow-push-rejected/workflow-push-rejected'
 import { SAMLReauthRequiredDialog } from './saml-reauth-required/saml-reauth-required'
 import { CreateForkDialog } from './forks/create-fork-dialog'
+import { ForkSyncPreviewDialog } from './forks/fork-sync-preview-dialog'
+import { ForkSyncSummaryDialog } from './forks/fork-sync-summary-dialog'
 import { findContributionTargetDefaultBranch } from '../lib/branch'
 import {
   GitHubRepository,
@@ -153,6 +163,7 @@ import { WarningBeforeReset } from './reset/warning-before-reset'
 import { InvalidatedToken } from './invalidated-token/invalidated-token'
 import { MultiCommitOperationKind } from '../models/multi-commit-operation'
 import { AddSSHHost } from './ssh/add-ssh-host'
+import { formatCompactNumber } from '../lib/format-number'
 import { SSHKeyPassphrase } from './ssh/ssh-key-passphrase'
 import { getMultiCommitOperationChooseBranchStep } from '../lib/multi-commit-operation'
 import { ConfirmForcePush } from './rebase/confirm-force-push'
@@ -2087,6 +2098,21 @@ export class App extends React.Component<IAppProps, IAppState> {
           />
         )
       }
+      case PopupType.ForkSyncPreview:
+        return (
+          <ForkSyncPreviewDialog
+            repository={popup.repository}
+            onDismissed={onPopupDismissedFn}
+            dispatcher={this.props.dispatcher}
+          />
+        )
+      case PopupType.ForkSyncSummary:
+        return (
+          <ForkSyncSummaryDialog
+            summary={popup.summary}
+            onDismissed={onPopupDismissedFn}
+          />
+        )
       case PopupType.LocalChangesOverwritten:
         const selectedState = this.state.selectedState
 
@@ -3251,6 +3277,77 @@ export class App extends React.Component<IAppProps, IAppState> {
     )
   }
 
+  private renderForkSyncToolbarButton(): JSX.Element | null {
+    const selection = this.state.selectedState
+    if (selection == null || selection.type !== SelectionType.Repository) {
+      return null
+    }
+
+    const repository = selection.repository
+    const state = selection.state
+    const {
+      branchesState,
+      changesState,
+      multiCommitOperationState,
+      forkSyncPreview,
+    } = state
+    const { tip } = branchesState
+
+    if (!isRepositoryWithForkedGitHubRepository(repository)) {
+      return null
+    }
+
+    const disabled =
+      tip.kind !== TipState.Valid ||
+      changesState.workingDirectory.files.length > 0 ||
+      changesState.conflictState !== null ||
+      multiCommitOperationState !== null ||
+      state.isPushPullFetchInProgress ||
+      state.checkoutProgress !== null ||
+      state.revertProgress !== null
+
+    const syncableCount =
+      forkSyncPreview !== null &&
+      forkSyncPreview.isBasedOnFetch &&
+      !forkSyncPreview.isLoading
+        ? forkSyncPreview.stats.syncableCount
+        : 0
+
+    const syncBadge =
+      syncableCount > 0 ? (
+        <div className="ahead-behind">
+          <span>
+            {formatCompactNumber(syncableCount)}
+            <Octicon symbol={octicons.arrowDown} />
+          </span>
+        </div>
+      ) : null
+
+    return (
+      <ToolbarButton
+        className="sync-fork-button"
+        style={ToolbarButtonStyle.Subtitle}
+        title="Sync Fork"
+        description="From upstream"
+        tooltip="Merge changes from the parent repository into matching branches on your fork"
+        icon={syncClockwise}
+        disabled={disabled}
+        onClick={this.onSyncFork}
+      >
+        {syncBadge}
+      </ToolbarButton>
+    )
+  }
+
+  private onSyncFork = () => {
+    const selection = this.state.selectedState
+    if (selection == null || selection.type !== SelectionType.Repository) {
+      return
+    }
+
+    return this.props.dispatcher.showForkSyncPreview(selection.repository)
+  }
+
   private showCreateBranch = () => {
     const selection = this.state.selectedState
 
@@ -3447,6 +3544,7 @@ export class App extends React.Component<IAppProps, IAppState> {
         </div>
         {this.renderBranchToolbarButton()}
         {this.renderPushPullToolbarButton()}
+        {this.renderForkSyncToolbarButton()}
       </Toolbar>
     )
   }

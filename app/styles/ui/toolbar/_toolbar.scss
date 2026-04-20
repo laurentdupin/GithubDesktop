@@ -67,6 +67,17 @@
         flex-shrink: 0;
       }
     }
+    &.sync-fork-button {
+      width: 230px;
+      flex-grow: 0;
+      flex-shrink: 0;
+
+      &.resizable {
+        width: 230px;
+        flex-grow: 0;
+        flex-shrink: 0;
+      }
+    }
   }
 }
 

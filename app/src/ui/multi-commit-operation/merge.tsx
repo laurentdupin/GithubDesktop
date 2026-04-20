@@ -33,22 +33,34 @@ export abstract class Merge extends BaseMultiCommitOperation {
 
     const { theirBranch } = state.step.conflictState
     const { currentBranch: ourBranch } = conflictState
-    await dispatcher.finishConflictedMerge(
+    const finished = await dispatcher.finishConflictedMerge(
       repository,
       workingDirectory,
-      {
-        type: BannerType.SuccessfulMerge,
-        ourBranch,
-        theirBranch,
-      },
+      operationDetail.forkSyncContext === undefined
+        ? {
+            type: BannerType.SuccessfulMerge,
+            ourBranch,
+            theirBranch,
+          }
+        : null,
       operationDetail.isSquash
     )
 
+    if (!finished) {
+      return
+    }
+
     await dispatcher.setCommitMessage(repository, DefaultCommitMessage)
-    await this.props.dispatcher.changeRepositorySection(
+    await dispatcher.changeRepositorySection(
       repository,
       RepositorySectionTab.Changes
     )
+
+    if (operationDetail.forkSyncContext !== undefined) {
+      await dispatcher.continueForkSyncAfterConflictedMerge(repository)
+      return
+    }
+
     this.onFlowEnded()
     dispatcher.incrementMetric('guidedConflictedMergeCompletionCount')
   }
@@ -59,13 +71,22 @@ export abstract class Merge extends BaseMultiCommitOperation {
       dispatcher,
       state: { operationDetail },
     } = this.props
-    this.onFlowEnded()
     if (
       operationDetail.kind === MultiCommitOperationKind.Merge &&
       operationDetail.isSquash
     ) {
+      this.onFlowEnded()
       return dispatcher.abortSquashMerge(repository)
     }
+
+    if (
+      operationDetail.kind === MultiCommitOperationKind.Merge &&
+      operationDetail.forkSyncContext !== undefined
+    ) {
+      return dispatcher.abortForkSyncConflictedMerge(repository)
+    }
+
+    this.onFlowEnded()
     return dispatcher.abortMerge(repository)
   }
 

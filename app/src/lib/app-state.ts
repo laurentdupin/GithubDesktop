@@ -53,6 +53,7 @@ import type {
 } from './git'
 import { Popup } from '../models/popup'
 import { RepoRulesInfo } from '../models/repo-rules'
+import { IForkSyncPreviewCache } from '../models/fork-sync'
 import { IAPIRepoRuleset } from './api'
 import { ICustomIntegration } from './custom-integration'
 import { Emoji } from './emoji'
@@ -577,6 +578,9 @@ export interface IRepositoryState {
 
   /** The date the repository was last fetched. */
   readonly lastFetched: Date | null
+
+  /** Cached fork sync preview data derived from the latest fetch. */
+  readonly forkSyncPreview: IForkSyncPreviewCache | null
 
   readonly hookProgress: HookProgress | null
   readonly subscribeToCommitOutput: TerminalOutputListener | null

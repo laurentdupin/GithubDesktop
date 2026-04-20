@@ -1,0 +1,97 @@
+@import '../../../styles/variables';
+
+.fork-sync-preview-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--spacing-half);
+  margin-top: var(--spacing);
+}
+
+.fork-sync-preview-stat {
+  display: grid;
+  gap: 2px;
+  padding: var(--spacing-half) var(--spacing);
+  border: 1px solid var(--box-border-color);
+  border-radius: var(--border-radius);
+  background-color: var(--box-alt-background-color);
+}
+
+.fork-sync-preview-stat-label {
+  color: var(--text-secondary-color);
+  font-size: var(--font-size-sm);
+}
+
+.fork-sync-preview-stat-value {
+  font-size: var(--font-size-lg);
+}
+
+.fork-sync-preview-caption {
+  margin-top: var(--spacing);
+  margin-bottom: 0;
+  color: var(--text-secondary-color);
+}
+
+.fork-sync-preview-table {
+  margin-top: var(--spacing);
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid var(--box-border-color);
+  border-radius: var(--border-radius);
+  background-color: var(--box-alt-background-color);
+}
+
+.fork-sync-preview-list {
+  display: grid;
+  gap: 0;
+}
+
+.fork-sync-preview-header,
+.fork-sync-preview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1.3fr) 100px 60px;
+  gap: var(--spacing);
+  align-items: start;
+}
+
+.fork-sync-preview-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--spacing-half) var(--spacing);
+  border-bottom: 1px solid var(--box-border-color);
+  background-color: var(--box-alt-background-color);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.fork-sync-preview-row {
+  padding: var(--spacing-half) var(--spacing);
+  border-bottom: 1px solid var(--box-border-color);
+}
+
+.fork-sync-preview-branch {
+  min-width: 0;
+}
+
+.fork-sync-preview-refs {
+  display: grid;
+  gap: 2px;
+  margin-top: var(--spacing-third);
+  color: var(--text-secondary-color);
+  font-size: var(--font-size-sm);
+  word-break: break-word;
+}
+
+.fork-sync-preview-empty {
+  margin-top: var(--spacing);
+}
+
+.fork-sync-summary {
+  display: grid;
+  gap: var(--spacing-half);
+}
+
+.fork-sync-summary-stopped {
+  margin-top: var(--spacing-half);
+}

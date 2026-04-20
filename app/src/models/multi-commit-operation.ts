@@ -1,6 +1,7 @@
 import { MultiCommitOperationConflictState } from '../lib/app-state'
 import { Branch } from './branch'
 import { Commit, CommitOneLine, ICommitContext } from './commit'
+import { IForkSyncContext } from './fork-sync'
 import { GitHubRepository } from './github-repository'
 import { IDetachedHead, IUnbornRepository, IValidBranch } from './tip'
 
@@ -234,6 +235,7 @@ interface IRebaseDetails extends ISourceBranchDetails {
 interface IMergeDetails extends ISourceBranchDetails {
   readonly kind: MultiCommitOperationKind.Merge
   readonly isSquash: boolean
+  readonly forkSyncContext?: IForkSyncContext
 }
 
 export type MultiCommitOperationDetail =

@@ -57,6 +57,7 @@ import {
   nameOf,
   Repository,
   isRepositoryWithGitHubRepository,
+  isRepositoryWithForkedGitHubRepository,
   RepositoryWithGitHubRepository,
   getNonForkGitHubRepository,
   isForkedRepositoryContributingToParent,
@@ -181,6 +182,7 @@ import {
   IStatusResult,
   GitError,
   MergeResult,
+  getBranches,
   getBranchesDifferingFromUpstream,
   deleteLocalBranch,
   deleteRemoteBranch,
@@ -188,6 +190,7 @@ import {
   GitResetMode,
   reset,
   getBranchAheadBehind,
+  getAheadBehind,
   getRebaseInternalState,
   getCommit,
   appendIgnoreFile,
@@ -198,6 +201,7 @@ import {
   updateRemoteHEAD,
   getBranchMergeBaseChangedFiles,
   getBranchMergeBaseDiff,
+  revSymmetricDifference,
   checkoutCommit,
   getRemoteURL,
   getGlobalConfigPath,
@@ -333,6 +337,13 @@ import {
   MultiCommitOperationStep,
   MultiCommitOperationStepKind,
 } from '../../models/multi-commit-operation'
+import {
+  getForkSyncCandidateBranches,
+  IForkSyncContext,
+  IForkSyncPreviewCache,
+  IForkSyncPreviewEntry,
+  summarizeForkSyncPreviewEntries,
+} from '../../models/fork-sync'
 import { reorder } from '../git/reorder'
 import { UseWindowsOpenSSHKey } from '../ssh/ssh'
 import { isConflictsFlow } from '../multi-commit-operation'
@@ -594,6 +605,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
   private repositoryFilterText: string = ''
 
   private currentMergeTreePromise: Promise<void> | null = null
+  private readonly forkSyncPreviewRefreshers = new Map<
+    number,
+    Promise<ReadonlyArray<IForkSyncPreviewEntry>>
+  >()
 
   /** The function to resolve the current Open in Desktop flow. */
   private resolveOpenInDesktop:
@@ -1173,6 +1188,12 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
   private onGitStoreUpdated(repository: Repository, gitStore: GitStore) {
     const prevRepositoryState = this.repositoryStateCache.get(repository)
+    const invalidateForkSyncPreview =
+      prevRepositoryState.branchesState.allBranches !== gitStore.allBranches ||
+      !tipEquals(prevRepositoryState.branchesState.tip, gitStore.tip) ||
+      !remoteEquals(prevRepositoryState.remote, gitStore.currentRemote) ||
+      prevRepositoryState.lastFetched?.getTime() !==
+        gitStore.lastFetched?.getTime()
 
     this.repositoryStateCache.updateBranchesState(repository, state => {
       let { currentPullRequest } = state
@@ -1269,6 +1290,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
       tagsToPush: gitStore.tagsToPush,
       remote: gitStore.currentRemote,
       lastFetched: gitStore.lastFetched,
+      forkSyncPreview: invalidateForkSyncPreview
+        ? null
+        : prevRepositoryState.forkSyncPreview,
     }))
 
     // _selectWorkingDirectoryFiles and _selectStashedFile will
@@ -4954,6 +4978,158 @@ export class AppStore extends TypedBaseStore<IAppState> {
     })
   }
 
+  public async _pushBranchToRemote(
+    repository: Repository,
+    branch: Branch,
+    remote: IRemote,
+    remoteBranchName: string
+  ): Promise<boolean> {
+    return this.withRefreshedGitHubRepository(repository, repository => {
+      return this.performPushToRemote(
+        repository,
+        branch,
+        remote,
+        remoteBranchName
+      )
+    })
+  }
+
+  public async _pushForkSyncBranch(
+    repository: Repository,
+    branchName: string
+  ): Promise<boolean> {
+    const {
+      branchesState: { allBranches },
+    } = this.repositoryStateCache.get(repository)
+    const localBranch = allBranches.find(
+      b => b.type === BranchType.Local && b.name === branchName
+    )
+    const originRemote = this.gitStoreCache
+      .get(repository)
+      .remotes.find(r => r.name === 'origin')
+
+    if (localBranch === undefined || originRemote === undefined) {
+      return false
+    }
+
+    return this._pushBranchToRemote(
+      repository,
+      localBranch,
+      originRemote,
+      branchName
+    )
+  }
+
+  private async performPushToRemote(
+    repository: Repository,
+    branch: Branch,
+    remote: IRemote,
+    remoteBranchName: string
+  ): Promise<boolean> {
+    let pushed = false
+
+    await this.withPushPullFetch(repository, async () => {
+      try {
+        const pushTitle = `Pushing to ${remote.name}`
+
+        this.updatePushPullFetchProgress(repository, {
+          kind: 'push',
+          title: pushTitle,
+          value: 0,
+          remote: remote.name,
+          branch: branch.name,
+        })
+
+        let pushWeight = 2.5
+        let fetchWeight = 1
+        const refreshWeight = 0.1
+        const scale = (1 / (pushWeight + fetchWeight)) * (1 - refreshWeight)
+
+        pushWeight *= scale
+        fetchWeight *= scale
+
+        const retryAction: RetryAction = {
+          type: RetryActionType.Push,
+          repository,
+        }
+
+        const safeRemote: IRemote = { name: remote.name, url: remote.url }
+        const gitStore = this.gitStoreCache.get(repository)
+
+        const pushSucceeded = await gitStore.performFailableOperation(
+          async () => {
+            let aborted = false
+
+            await pushRepo(
+              repository,
+              safeRemote,
+              branch.name,
+              remoteBranchName,
+              null,
+              {
+                onHookFailure: this.onHookFailure(() => (aborted = true)),
+              },
+              progress => {
+                this.updatePushPullFetchProgress(repository, {
+                  ...progress,
+                  title: pushTitle,
+                  value: pushWeight * progress.value,
+                })
+              }
+            ).catch(err => (aborted ? undefined : Promise.reject(err)))
+
+            if (aborted) {
+              return false
+            }
+
+            await gitStore.fetchRemotes([safeRemote], false, fetchProgress => {
+              this.updatePushPullFetchProgress(repository, {
+                ...fetchProgress,
+                value: pushWeight + fetchProgress.value * fetchWeight,
+              })
+            })
+
+            const refreshTitle = __DARWIN__
+              ? 'Refreshing Repository'
+              : 'Refreshing repository'
+            const refreshStartProgress = pushWeight + fetchWeight
+
+            this.updatePushPullFetchProgress(repository, {
+              kind: 'generic',
+              title: refreshTitle,
+              description: 'Fast-forwarding branches',
+              value: refreshStartProgress,
+            })
+
+            await this.fastForwardBranches(repository)
+
+            this.updatePushPullFetchProgress(repository, {
+              kind: 'generic',
+              title: refreshTitle,
+              value: refreshStartProgress + refreshWeight * 0.5,
+            })
+
+            await this.refreshBranchProtectionState(repository)
+            await this._refreshRepository(repository)
+
+            pushed = true
+            return true
+          },
+          { retryAction }
+        )
+
+        if (pushSucceeded !== true) {
+          pushed = false
+        }
+      } finally {
+        this.updatePushPullFetchProgress(repository, null)
+        this.updateMenuLabelsForSelectedRepository()
+      }
+    })
+
+    return pushed
+  }
+
   private async withIsCommitting(
     repository: Repository,
     fn: () => Promise<boolean>
@@ -5188,6 +5364,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
           await this.refreshBranchProtectionState(repository)
 
           await this._refreshRepository(repository)
+          void this.refreshForkSyncPreviewCache(repository, true).catch(error =>
+            log.error('Failed refreshing fork sync cache after pull', error)
+          )
         } finally {
           this.updatePushPullFetchProgress(repository, null)
         }
@@ -5559,6 +5738,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
         await this.refreshBranchProtectionState(repository)
 
         await this._refreshRepository(repository)
+        void this.refreshForkSyncPreviewCache(repository, true).catch(error =>
+          log.error('Failed refreshing fork sync cache after fetch', error)
+        )
       } finally {
         this.updatePushPullFetchProgress(repository, null)
 
@@ -5569,6 +5751,288 @@ export class AppStore extends TypedBaseStore<IAppState> {
         }
       }
     })
+  }
+
+  private isForkSyncPreviewFresh(
+    repository: Repository,
+    preview: IForkSyncPreviewCache | null
+  ): preview is IForkSyncPreviewCache {
+    if (preview === null || preview.isLoading || !preview.isBasedOnFetch) {
+      return false
+    }
+
+    const { lastFetched } = this.repositoryStateCache.get(repository)
+    return (
+      lastFetched !== null &&
+      preview.lastFetched !== null &&
+      lastFetched.getTime() === preview.lastFetched.getTime()
+    )
+  }
+
+  private async refreshForkSyncPreviewCache(
+    repository: Repository,
+    isBasedOnFetch: boolean
+  ): Promise<ReadonlyArray<IForkSyncPreviewEntry>> {
+    if (!isRepositoryWithForkedGitHubRepository(repository)) {
+      if (this.repositoryStateCache.get(repository).forkSyncPreview !== null) {
+        this.repositoryStateCache.update(repository, () => ({
+          forkSyncPreview: null,
+        }))
+        this.emitUpdate()
+      }
+      return []
+    }
+
+    const existingPromise = this.forkSyncPreviewRefreshers.get(repository.id)
+    if (existingPromise !== undefined) {
+      return existingPromise
+    }
+
+    const previousPreview = this.repositoryStateCache.get(repository).forkSyncPreview
+
+    if (previousPreview !== null) {
+      this.repositoryStateCache.update(repository, () => ({
+        forkSyncPreview: {
+          ...previousPreview,
+          isLoading: true,
+          isBasedOnFetch,
+        },
+      }))
+      this.emitUpdate()
+    }
+
+    const promise = (async () => {
+      try {
+        await this.addUpstreamRemoteIfNeeded(repository)
+
+        const gitStore = this.gitStoreCache.get(repository)
+        await gitStore.loadRemotes()
+
+        const originRemote = gitStore.remotes.find(r => r.name === 'origin')
+        const upstreamRemote = gitStore.upstreamRemote
+        const {
+          branchesState: { defaultBranch },
+        } = this.repositoryStateCache.get(repository)
+
+        let entries = new Array<IForkSyncPreviewEntry>()
+
+        if (originRemote !== undefined && upstreamRemote !== null) {
+          const allBranches = await getBranches(repository)
+          entries = [
+            ...(await this.computeForkSyncPreviewEntries(
+              repository,
+              allBranches,
+              defaultBranch?.nameWithoutRemote ?? null,
+              originRemote.name,
+              upstreamRemote.name
+            )),
+          ]
+        }
+
+        this.repositoryStateCache.update(repository, state => ({
+          forkSyncPreview: {
+            entries,
+            stats: summarizeForkSyncPreviewEntries(entries),
+            lastFetched: state.lastFetched,
+            isLoading: false,
+            isBasedOnFetch,
+          },
+        }))
+        this.emitUpdate()
+
+        return entries
+      } finally {
+        this.forkSyncPreviewRefreshers.delete(repository.id)
+      }
+    })()
+
+    this.forkSyncPreviewRefreshers.set(repository.id, promise)
+    return promise
+  }
+
+  public async _loadForkSyncPreview(
+    repository: Repository
+  ): Promise<ReadonlyArray<IForkSyncPreviewEntry>> {
+    return this.withRefreshedGitHubRepository(repository, async repository => {
+      const cachedPreview = this.repositoryStateCache.get(repository).forkSyncPreview
+      if (this.isForkSyncPreviewFresh(repository, cachedPreview)) {
+        return cachedPreview.entries
+      }
+
+      const inFlightPreview = this.forkSyncPreviewRefreshers.get(repository.id)
+      if (inFlightPreview !== undefined) {
+        return inFlightPreview
+      }
+
+      await this.addUpstreamRemoteIfNeeded(repository)
+      await this._refreshRepository(repository)
+
+      const gitStore = this.gitStoreCache.get(repository)
+      const originRemote = gitStore.remotes.find(r => r.name === 'origin')
+      const upstreamRemote = gitStore.upstreamRemote
+
+      if (originRemote === undefined) {
+        throw new Error('Fork sync requires an origin remote.')
+      }
+
+      if (upstreamRemote === null) {
+        throw new Error('Fork sync requires an upstream remote.')
+      }
+
+      const remotes =
+        originRemote.name === upstreamRemote.name
+          ? [originRemote]
+          : [originRemote, upstreamRemote]
+
+      await this.performFetch(repository, FetchType.UserInitiatedTask, remotes)
+      const refreshedPreview = this.repositoryStateCache.get(repository)
+        .forkSyncPreview
+      if (this.isForkSyncPreviewFresh(repository, refreshedPreview)) {
+        return refreshedPreview.entries
+      }
+
+      return this.refreshForkSyncPreviewCache(repository, true)
+    })
+  }
+
+  private async computeForkSyncPreviewEntries(
+    repository: Repository,
+    branches: ReadonlyArray<Branch>,
+    defaultBranchName: string | null,
+    originRemoteName: string,
+    upstreamRemoteName: string
+  ): Promise<ReadonlyArray<IForkSyncPreviewEntry>> {
+    const candidates = getForkSyncCandidateBranches(
+      branches,
+      defaultBranchName,
+      originRemoteName,
+      upstreamRemoteName
+    )
+    const entries = new Array<IForkSyncPreviewEntry>()
+
+    for (const candidate of candidates) {
+      const { branchName, localBranch, originBranch, upstreamBranch } = candidate
+
+      if (localBranch === null) {
+        entries.push({
+          branchName,
+          localRef: null,
+          originRef: originBranch.ref,
+          upstreamRef: upstreamBranch.ref,
+          status: 'skipped-no-local',
+          commitCountFromParent: 0,
+          skipReason: 'Local branch is missing.',
+          willPush: false,
+        })
+        continue
+      }
+
+      if (localBranch.tip.sha !== originBranch.tip.sha) {
+        entries.push({
+          branchName,
+          localRef: localBranch.ref,
+          originRef: originBranch.ref,
+          upstreamRef: upstreamBranch.ref,
+          status: 'skipped-diverged-origin',
+          commitCountFromParent: 0,
+          skipReason:
+            'Local branch tip does not match the branch on origin.',
+          willPush: false,
+        })
+        continue
+      }
+
+      const aheadBehind = await getAheadBehind(
+        repository,
+        revSymmetricDifference(localBranch.name, upstreamBranch.name)
+      )
+      const commitCountFromParent = aheadBehind?.behind ?? 0
+
+      if (commitCountFromParent === 0) {
+        entries.push({
+          branchName,
+          localRef: localBranch.ref,
+          originRef: originBranch.ref,
+          upstreamRef: upstreamBranch.ref,
+          status: 'up-to-date',
+          commitCountFromParent,
+          willPush: false,
+        })
+        continue
+      }
+
+      const mergeability = await determineMergeability(
+        repository,
+        localBranch,
+        upstreamBranch
+      ).catch<MergeTreeResult>(e => {
+        log.error('Failed determining fork sync mergeability', e)
+        return { kind: ComputedAction.Conflicts, conflictedFiles: 0 }
+      })
+
+      if (mergeability.kind === ComputedAction.Clean) {
+        entries.push({
+          branchName,
+          localRef: localBranch.ref,
+          originRef: originBranch.ref,
+          upstreamRef: upstreamBranch.ref,
+          status: 'needs-sync',
+          commitCountFromParent,
+          willPush: true,
+        })
+      } else {
+        entries.push({
+          branchName,
+          localRef: localBranch.ref,
+          originRef: originBranch.ref,
+          upstreamRef: upstreamBranch.ref,
+          status: 'conflicts',
+          commitCountFromParent,
+          conflictedFiles:
+            mergeability.kind === ComputedAction.Conflicts
+              ? mergeability.conflictedFiles
+              : undefined,
+          skipReason:
+            mergeability.kind === ComputedAction.Invalid
+              ? 'Unable to merge unrelated histories automatically.'
+              : undefined,
+          willPush: true,
+        })
+      }
+    }
+
+    const localBranchCount = branches.filter(
+      branch => branch.type === BranchType.Local
+    ).length
+    const defaultBranchEntry =
+      defaultBranchName !== null
+        ? entries.find(entry => entry.branchName === defaultBranchName)
+        : undefined
+    const needsSyncCount = entries.filter(
+      entry => entry.status === 'needs-sync'
+    ).length
+    const conflictsCount = entries.filter(
+      entry => entry.status === 'conflicts'
+    ).length
+    const upToDateCount = entries.filter(
+      entry => entry.status === 'up-to-date'
+    ).length
+    const skippedNoLocalCount = entries.filter(
+      entry => entry.status === 'skipped-no-local'
+    ).length
+    const skippedDivergedOriginCount = entries.filter(
+      entry => entry.status === 'skipped-diverged-origin'
+    ).length
+
+    log.info(
+      `[ForkSync] Preview computed for ${repository.path}: candidates=${candidates.length}, localBranches=${localBranchCount}, remoteBranches=${
+        branches.length - localBranchCount
+      }, needsSync=${needsSyncCount}, conflicts=${conflictsCount}, upToDate=${upToDateCount}, skippedNoLocal=${skippedNoLocalCount}, skippedDivergedOrigin=${skippedDivergedOriginCount}, defaultBranch=${
+        defaultBranchName ?? 'none'
+      }, defaultBranchStatus=${defaultBranchEntry?.status ?? 'missing'}`
+    )
+
+    return entries
   }
 
   public _endWelcomeFlow(): Promise<void> {
@@ -5855,7 +6319,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
     sourceBranch: Branch,
     mergeStatus: MergeTreeResult | null,
     isSquash: boolean = false
-  ): Promise<void> {
+  ): Promise<MergeResult | undefined> {
     const { multiCommitOperationState: opState } =
       this.repositoryStateCache.get(repository)
 
@@ -5866,6 +6330,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
       log.error('[mergeBranch] - Not in merge operation state')
       return
     }
+
+    const preserveOperationState =
+      opState.operationDetail.forkSyncContext !== undefined
 
     this.repositoryStateCache.updateMultiCommitOperationState(
       repository,
@@ -5897,37 +6364,45 @@ export class AppStore extends TypedBaseStore<IAppState> {
     })
 
     if (aborted) {
-      return this._refreshRepository(repository)
+      await this._refreshRepository(repository)
+      return mergeResult
     }
 
     const { tip } = gitStore
 
     if (mergeResult === MergeResult.Success && tip.kind === TipState.Valid) {
-      this._setBanner({
-        type: BannerType.SuccessfulMerge,
-        ourBranch: tip.branch.name,
-        theirBranch: sourceBranch.name,
-      })
+      if (!preserveOperationState) {
+        this._setBanner({
+          type: BannerType.SuccessfulMerge,
+          ourBranch: tip.branch.name,
+          theirBranch: sourceBranch.name,
+        })
+      }
       if (isSquash) {
         // This code will only run when there are no conflicts.
         // Thus recordSquashMergeSuccessful is done here and when merge finishes
         // successfully after conflicts in `dispatcher.finishConflictedMerge`.
         this.statsStore.increment('squashMergeSuccessfulCount')
       }
-      this._endMultiCommitOperation(repository)
+      if (!preserveOperationState) {
+        this._endMultiCommitOperation(repository)
+      }
     } else if (
       mergeResult === MergeResult.AlreadyUpToDate &&
       tip.kind === TipState.Valid
     ) {
-      this._setBanner({
-        type: BannerType.BranchAlreadyUpToDate,
-        ourBranch: tip.branch.name,
-        theirBranch: sourceBranch.name,
-      })
-      this._endMultiCommitOperation(repository)
+      if (!preserveOperationState) {
+        this._setBanner({
+          type: BannerType.BranchAlreadyUpToDate,
+          ourBranch: tip.branch.name,
+          theirBranch: sourceBranch.name,
+        })
+        this._endMultiCommitOperation(repository)
+      }
     }
 
-    return this._refreshRepository(repository)
+    await this._refreshRepository(repository)
+    return mergeResult
   }
 
   /** This shouldn't be called directly. See `Dispatcher`. */
@@ -8150,6 +8625,34 @@ export class AppStore extends TypedBaseStore<IAppState> {
         targetBranch,
       })
     )
+  }
+
+  public _setForkSyncContext(
+    repository: Repository,
+    forkSyncContext: IForkSyncContext
+  ): void {
+    this.repositoryStateCache.update(repository, state => {
+      const opState = state.multiCommitOperationState
+
+      if (
+        opState === null ||
+        opState.operationDetail.kind !== MultiCommitOperationKind.Merge
+      ) {
+        return { multiCommitOperationState: opState }
+      }
+
+      return {
+        multiCommitOperationState: {
+          ...opState,
+          operationDetail: {
+            ...opState.operationDetail,
+            forkSyncContext,
+          },
+        },
+      }
+    })
+
+    this.emitUpdate()
   }
 
   /** This shouldn't be called directly. See `Dispatcher`. */

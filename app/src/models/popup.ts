@@ -26,6 +26,7 @@ import { IAPIComment } from '../lib/api'
 import { ISecretScanResult } from '../ui/secret-scanning/push-protection-error-dialog'
 import { BypassReasonType } from '../ui/secret-scanning/bypass-push-protection-dialog'
 import { TerminalOutput, TerminalOutputListener } from '../lib/git'
+import { IForkSyncSummary } from './fork-sync'
 
 export enum PopupType {
   RenameBranch = 'RenameBranch',
@@ -107,6 +108,8 @@ export enum PopupType {
   GenerateCommitMessageDisclaimer = 'GenerateCommitMessageDisclaimer',
   HookFailed = 'HookFailed',
   CommitProgress = 'CommitProgress',
+  ForkSyncPreview = 'ForkSyncPreview',
+  ForkSyncSummary = 'ForkSyncSummary',
 }
 
 interface IBasePopup {
@@ -478,5 +481,14 @@ export type PopupDetail =
   | {
       type: PopupType.CommitProgress
       subscribeToCommitOutput: TerminalOutputListener
+    }
+  | {
+      type: PopupType.ForkSyncPreview
+      repository: Repository
+    }
+  | {
+      type: PopupType.ForkSyncSummary
+      repository: Repository
+      summary: IForkSyncSummary
     }
 export type Popup = IBasePopup & PopupDetail

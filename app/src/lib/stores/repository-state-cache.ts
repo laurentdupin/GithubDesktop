@@ -368,6 +368,7 @@ function getInitialRepositoryState(): IRepositoryState {
     isGeneratingCommitMessage: false,
     commitToAmend: null,
     lastFetched: null,
+    forkSyncPreview: null,
     checkoutProgress: null,
     pushPullFetchProgress: null,
     revertProgress: null,

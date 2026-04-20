@@ -32,10 +32,12 @@ import {
 import {
   RebaseResult,
   PushOptions,
+  MergeResult,
   getCommitsBetweenCommits,
   getBranches,
   getRebaseSnapshot,
   getRepositoryType,
+  updateSubmodulesAfterOperation,
 } from '../../lib/git'
 import { isGitOnPath } from '../../lib/is-git-on-path'
 import {
@@ -60,7 +62,7 @@ import { getTipSha } from '../../lib/tip'
 import { Account } from '../../models/account'
 import { AppMenu, ExecutableMenuItem } from '../../models/app-menu'
 import { Author, UnknownAuthor } from '../../models/author'
-import { Branch, IAheadBehind } from '../../models/branch'
+import { Branch, BranchType, IAheadBehind } from '../../models/branch'
 import { BranchesTab } from '../../models/branches-tab'
 import { CloneRepositoryTab } from '../../models/clone-repository-tab'
 import { CloningRepository } from '../../models/cloning-repository'
@@ -121,6 +123,11 @@ import {
   MultiCommitOperationStep,
   MultiCommitOperationStepKind,
 } from '../../models/multi-commit-operation'
+import {
+  buildForkSyncSummary,
+  IForkSyncContext,
+  IForkSyncPreviewEntry,
+} from '../../models/fork-sync'
 import { getMultiCommitOperationChooseBranchStep } from '../../lib/multi-commit-operation'
 import { ICombinedRefCheck, IRefCheck } from '../../lib/ci-checks/ci-checks'
 import { ValidNotificationPullRequestReviewState } from '../../lib/valid-notification-pull-request-review'
@@ -406,6 +413,19 @@ export class Dispatcher {
    */
   public closePopup(popupType?: PopupType) {
     return this.appStore._closePopup(popupType)
+  }
+
+  public showForkSyncPreview(repository: Repository): Promise<void> {
+    return this.showPopup({
+      type: PopupType.ForkSyncPreview,
+      repository,
+    })
+  }
+
+  public loadForkSyncPreview(
+    repository: Repository
+  ): Promise<ReadonlyArray<IForkSyncPreviewEntry>> {
+    return this.appStore._loadForkSyncPreview(repository)
   }
 
   /**
@@ -1164,7 +1184,7 @@ export class Dispatcher {
     branch: Branch,
     mergeStatus: MergeTreeResult | null,
     isSquash: boolean = false
-  ): Promise<void> {
+  ): Promise<MergeResult | undefined> {
     return this.appStore._mergeBranch(repository, branch, mergeStatus, isSquash)
   }
 
@@ -1393,9 +1413,9 @@ export class Dispatcher {
   public async finishConflictedMerge(
     repository: Repository,
     workingDirectory: WorkingDirectoryStatus,
-    successfulMergeBanner: Banner,
+    successfulMergeBanner: Banner | null,
     isSquash: boolean
-  ) {
+  ): Promise<boolean> {
     // get manual resolutions in case there are manual conflicts
     const repositoryState = this.repositoryStateManager.get(repository)
     const { conflictState } = repositoryState.changesState
@@ -1404,7 +1424,7 @@ export class Dispatcher {
       log.error(
         'Conflict state missing during finishConflictedMerge. No merge will be committed.'
       )
-      return
+      return false
     }
     const result = await this.appStore._finishConflictedMerge(
       repository,
@@ -1412,7 +1432,9 @@ export class Dispatcher {
       conflictState.manualResolutions
     )
     if (result !== undefined) {
-      this.setBanner(successfulMergeBanner)
+      if (successfulMergeBanner !== null) {
+        this.setBanner(successfulMergeBanner)
+      }
       if (isSquash) {
         // Squash merge will not hit the normal recording of successful merge in
         // app-store._mergeBranch because it only records there when there are
@@ -1421,7 +1443,13 @@ export class Dispatcher {
         this.statsStore.increment('squashMergeSuccessfulCount')
         this.statsStore.increment('squashMergeSuccessfulWithConflictsCount')
       }
+
+      await this.appStore._loadStatus(repository)
+      await this.refreshRepository(repository)
+      return true
     }
+
+    return false
   }
 
   /** Record the given launch stats. */
@@ -2165,11 +2193,12 @@ export class Dispatcher {
         break
 
       case RetryActionType.Merge:
-        return this.mergeBranch(
+        await this.mergeBranch(
           retryAction.repository,
           retryAction.theirBranch,
           null
         )
+        break
 
       case RetryActionType.Rebase:
         return this.rebase(
@@ -3886,7 +3915,8 @@ export class Dispatcher {
   public initializeMergeOperation(
     repository: Repository,
     isSquash: boolean,
-    sourceBranch: Branch | null
+    sourceBranch: Branch | null,
+    forkSyncContext?: IForkSyncContext
   ) {
     const {
       branchesState: { tip },
@@ -3908,11 +3938,351 @@ export class Dispatcher {
         kind: MultiCommitOperationKind.Merge,
         isSquash,
         sourceBranch,
+        forkSyncContext,
       },
       currentBranch,
       [],
       currentBranch.tip.sha
     )
+  }
+
+  public async startForkSync(
+    repository: Repository,
+    previewEntries: ReadonlyArray<IForkSyncPreviewEntry>
+  ): Promise<void> {
+    const {
+      branchesState: { tip },
+    } = this.repositoryStateManager.get(repository)
+
+    if (tip.kind !== TipState.Valid) {
+      return
+    }
+
+    const remainingEntries = previewEntries.filter(
+      entry =>
+        entry.status === 'needs-sync' || entry.status === 'conflicts'
+    )
+
+    if (remainingEntries.length === 0) {
+      return
+    }
+
+    const completedEntries = previewEntries
+      .filter(entry => entry.status === 'up-to-date')
+      .map(entry => ({
+        branchName: entry.branchName,
+        status: 'up-to-date' as const,
+      }))
+
+    const skippedEntries = previewEntries.filter(
+      entry =>
+        entry.status === 'skipped-no-local' ||
+        entry.status === 'skipped-diverged-origin'
+    )
+
+    this.closePopup(PopupType.ForkSyncPreview)
+    this.initializeMergeOperation(repository, false, null, {
+      originalBranchName: tip.branch.nameWithoutRemote,
+      remainingEntries,
+      completedEntries,
+      skippedEntries,
+      autoPush: true,
+    })
+
+    await this.executeNextForkSyncBranch(repository)
+  }
+
+  public async continueForkSyncAfterConflictedMerge(
+    repository: Repository
+  ): Promise<void> {
+    const context = this.getForkSyncContext(repository)
+    const currentEntry = context?.remainingEntries[0]
+
+    if (context === null || currentEntry === undefined) {
+      return
+    }
+
+    await this.closePopup(PopupType.MultiCommitOperation)
+    await this.setMultiCommitOperationStep(repository, {
+      kind: MultiCommitOperationStepKind.ShowProgress,
+    })
+
+    const updatedSubmodules = await this.updateForkSyncSubmodules(repository)
+    if (!updatedSubmodules) {
+      return this.stopForkSync(
+        repository,
+        currentEntry.branchName,
+        'Updating submodules after resolving conflicts failed.'
+      )
+    }
+
+    if (context.autoPush) {
+      const pushSucceeded = await this.appStore._pushForkSyncBranch(
+        repository,
+        currentEntry.branchName
+      )
+
+      if (!pushSucceeded) {
+        return this.stopForkSync(
+          repository,
+          currentEntry.branchName,
+          'Push to origin failed after resolving conflicts.'
+        )
+      }
+    }
+
+    this.updateForkSyncContext(repository, {
+      ...context,
+      completedEntries: [
+        ...context.completedEntries,
+        { branchName: currentEntry.branchName, status: 'synced' },
+      ],
+      remainingEntries: context.remainingEntries.slice(1),
+    })
+
+    await this.executeNextForkSyncBranch(repository)
+  }
+
+  public async abortForkSyncConflictedMerge(
+    repository: Repository
+  ): Promise<void> {
+    const context = this.getForkSyncContext(repository)
+    const currentEntry = context?.remainingEntries[0]
+
+    await this.abortMerge(repository)
+
+    if (currentEntry !== undefined) {
+      await this.stopForkSync(
+        repository,
+        currentEntry.branchName,
+        'Fork sync was aborted while resolving conflicts.'
+      )
+    }
+  }
+
+  private getForkSyncContext(repository: Repository): IForkSyncContext | null {
+    const { multiCommitOperationState } = this.repositoryStateManager.get(
+      repository
+    )
+
+    if (
+      multiCommitOperationState === null ||
+      multiCommitOperationState.operationDetail.kind !==
+        MultiCommitOperationKind.Merge
+    ) {
+      return null
+    }
+
+    return multiCommitOperationState.operationDetail.forkSyncContext ?? null
+  }
+
+  private updateForkSyncContext(
+    repository: Repository,
+    context: IForkSyncContext
+  ) {
+    this.appStore._setForkSyncContext(repository, context)
+  }
+
+  private async executeNextForkSyncBranch(
+    repository: Repository
+  ): Promise<void> {
+    const context = this.getForkSyncContext(repository)
+
+    if (context === null) {
+      return
+    }
+
+    const currentEntry = context.remainingEntries[0]
+
+    if (currentEntry === undefined) {
+      return this.finalizeForkSync(repository, context)
+    }
+
+    await this.checkoutLocalBranch(repository, currentEntry.branchName)
+
+    const {
+      branchesState: { allBranches },
+    } = this.repositoryStateManager.get(repository)
+
+    const localBranch = allBranches.find(
+      branch =>
+        branch.type === BranchType.Local &&
+        branch.ref === currentEntry.localRef
+    )
+    const upstreamBranch = allBranches.find(
+      branch => branch.ref === currentEntry.upstreamRef
+    )
+
+    if (localBranch === undefined || upstreamBranch === undefined) {
+      return this.stopForkSync(
+        repository,
+        currentEntry.branchName,
+        'A required branch disappeared while syncing.'
+      )
+    }
+
+    this.appStore._setMultiCommitOperationTargetBranch(repository, localBranch)
+
+    const mergeResult = await this.mergeBranch(
+      repository,
+      upstreamBranch,
+      null,
+      false
+    )
+
+    if (mergeResult === undefined) {
+      return this.stopForkSync(
+        repository,
+        currentEntry.branchName,
+        'Merge operation could not be started.'
+      )
+    }
+
+    if (mergeResult === MergeResult.Failed) {
+      const {
+        changesState: { conflictState },
+      } = this.repositoryStateManager.get(repository)
+
+      if (conflictState !== null) {
+        await this.showPopup({
+          type: PopupType.MultiCommitOperation,
+          repository,
+        })
+        return
+      }
+
+      return this.stopForkSync(
+        repository,
+        currentEntry.branchName,
+        'Merge from upstream failed.'
+      )
+    }
+
+    if (mergeResult === MergeResult.Success) {
+      const updatedSubmodules = await this.updateForkSyncSubmodules(repository)
+      if (!updatedSubmodules) {
+        return this.stopForkSync(
+          repository,
+          currentEntry.branchName,
+          'Updating submodules after merge failed.'
+        )
+      }
+
+      if (context.autoPush) {
+        const pushSucceeded = await this.appStore._pushForkSyncBranch(
+          repository,
+          currentEntry.branchName
+        )
+
+        if (!pushSucceeded) {
+          return this.stopForkSync(
+            repository,
+            currentEntry.branchName,
+            'Push to origin failed.'
+          )
+        }
+      }
+
+      this.updateForkSyncContext(repository, {
+        ...context,
+        completedEntries: [
+          ...context.completedEntries,
+          { branchName: currentEntry.branchName, status: 'synced' },
+        ],
+        remainingEntries: context.remainingEntries.slice(1),
+      })
+
+      return this.executeNextForkSyncBranch(repository)
+    }
+
+    this.updateForkSyncContext(repository, {
+      ...context,
+      completedEntries: [
+        ...context.completedEntries,
+        { branchName: currentEntry.branchName, status: 'up-to-date' },
+      ],
+      remainingEntries: context.remainingEntries.slice(1),
+    })
+
+    return this.executeNextForkSyncBranch(repository)
+  }
+
+  private async updateForkSyncSubmodules(
+    repository: Repository
+  ): Promise<boolean> {
+    try {
+      await updateSubmodulesAfterOperation(
+        repository,
+        null,
+        undefined,
+        'pull',
+        'Syncing fork',
+        'upstream',
+        false
+      )
+      await this.appStore._loadStatus(repository)
+      return true
+    } catch (error) {
+      log.error('Failed updating submodules during fork sync', error)
+      return false
+    }
+  }
+
+  private async stopForkSync(
+    repository: Repository,
+    branchName: string,
+    reason: string
+  ): Promise<void> {
+    const context = this.getForkSyncContext(repository)
+
+    if (context === null) {
+      return
+    }
+
+    const nextContext: IForkSyncContext = {
+      ...context,
+      stoppedEntry: {
+        branchName,
+        reason,
+      },
+    }
+
+    this.updateForkSyncContext(repository, nextContext)
+    await this.closePopup(PopupType.MultiCommitOperation)
+    await this.restoreOriginalBranchAfterForkSync(
+      repository,
+      nextContext.originalBranchName
+    )
+    this.endMultiCommitOperation(repository)
+    await this.showPopup({
+      type: PopupType.ForkSyncSummary,
+      repository,
+      summary: buildForkSyncSummary(nextContext),
+    })
+  }
+
+  private async finalizeForkSync(
+    repository: Repository,
+    context: IForkSyncContext
+  ): Promise<void> {
+    await this.closePopup(PopupType.MultiCommitOperation)
+    await this.restoreOriginalBranchAfterForkSync(
+      repository,
+      context.originalBranchName
+    )
+    this.endMultiCommitOperation(repository)
+    await this.showPopup({
+      type: PopupType.ForkSyncSummary,
+      repository,
+      summary: buildForkSyncSummary(context),
+    })
+  }
+
+  private async restoreOriginalBranchAfterForkSync(
+    repository: Repository,
+    branchName: string
+  ): Promise<void> {
+    await this.checkoutLocalBranch(repository, branchName)
   }
 
   public setShowCIStatusPopover(showCIStatusPopover: boolean) {
