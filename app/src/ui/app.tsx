@@ -2937,7 +2937,7 @@ export class App extends React.Component<IAppProps, IAppState> {
         selectedRepository={selectedRepository}
         onSelectionChanged={this.onSelectionChanged}
         repositories={this.state.repositories}
-        recentRepositories={this.state.recentRepositories}
+        pinnedRepositories={this.state.pinnedRepositories}
         localRepositoryStateLookup={this.state.localRepositoryStateLookup}
         askForConfirmationOnRemoveRepository={
           this.state.askForConfirmationOnRepositoryRemoval
@@ -2947,11 +2947,16 @@ export class App extends React.Component<IAppProps, IAppState> {
         onOpenInShell={this.openInShell}
         onShowRepository={this.showRepository}
         onOpenInExternalEditor={this.openInExternalEditor}
+        onSetRepositoryPinned={this.onSetRepositoryPinned}
         externalEditorLabel={this.externalEditorLabel}
         shellLabel={useCustomShell ? undefined : selectedShell}
         dispatcher={this.props.dispatcher}
       />
     )
+  }
+
+  private onSetRepositoryPinned = (repository: Repository, pinned: boolean) => {
+    return this.props.dispatcher.setRepositoryPinned(repository, pinned)
   }
 
   private viewOnGitHub = (

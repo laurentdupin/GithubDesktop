@@ -31,6 +31,12 @@ interface IRepositoryListItemProps {
 
   /** Number of uncommitted changes */
   readonly changedFilesCount: number
+
+  /** Whether the repository is pinned in the switcher. */
+  readonly isPinned: boolean
+
+  /** Called when the repository pin state should change. */
+  readonly onSetPinned?: (repository: Repository, pinned: boolean) => void
 }
 
 /** A repository item. */
@@ -56,6 +62,23 @@ export class RepositoryListItem extends React.Component<
         >
           {this.renderTooltip()}
         </Tooltip>
+
+        {repository instanceof Repository && (
+          <button
+            type="button"
+            className={classNames('pin-repository-button', {
+              pinned: this.props.isPinned,
+            })}
+            aria-label={
+              this.props.isPinned ? 'Unpin repository' : 'Pin repository'
+            }
+            title={this.props.isPinned ? 'Unpin repository' : 'Pin repository'}
+            onMouseDown={this.onPinButtonMouseDown}
+            onClick={this.onPinButtonClick}
+          >
+            <Octicon symbol={octicons.pin} />
+          </button>
+        )}
 
         <Octicon
           className="icon-for-repository"
@@ -94,9 +117,29 @@ export class RepositoryListItem extends React.Component<
       nextProps.repository !== this.props.repository ||
       nextProps.matches !== this.props.matches ||
       nextProps.currentBranch !== this.props.currentBranch ||
+      nextProps.isPinned !== this.props.isPinned ||
       nextProps.changedFilesCount !== this.props.changedFilesCount ||
       !aheadBehindEquals(nextProps.aheadBehind, this.props.aheadBehind)
     )
+  }
+
+  private onPinButtonMouseDown = (
+    event: React.MouseEvent<HTMLButtonElement>
+  ) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  private onPinButtonClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const { repository, onSetPinned } = this.props
+    if (!(repository instanceof Repository) || onSetPinned === undefined) {
+      return
+    }
+
+    onSetPinned(repository, !this.props.isPinned)
   }
 }
 

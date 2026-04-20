@@ -30,7 +30,7 @@ const BlankSlateImage = encodePathAsUrl(__dirname, 'static/empty-no-repo.svg')
 interface IRepositoriesListProps {
   readonly selectedRepository: Repositoryish | null
   readonly repositories: ReadonlyArray<Repositoryish>
-  readonly recentRepositories: ReadonlyArray<number>
+  readonly pinnedRepositories: ReadonlyArray<number>
 
   /** A cache of the latest repository state values, keyed by the repository id */
   readonly localRepositoryStateLookup: ReadonlyMap<
@@ -58,6 +58,12 @@ interface IRepositoriesListProps {
 
   /** Called when the repository should be opened in an external editor */
   readonly onOpenInExternalEditor: (repository: Repositoryish) => void
+
+  /** Called when the repository should be pinned or unpinned in the list. */
+  readonly onSetRepositoryPinned: (
+    repository: Repository,
+    pinned: boolean
+  ) => void
 
   /** The current external editor selected by the user */
   readonly externalEditorLabel?: string
@@ -119,14 +125,14 @@ export class RepositoriesList extends React.Component<
     (
       repositories: ReadonlyArray<Repositoryish> | null,
       localRepositoryStateLookup: ReadonlyMap<number, ILocalRepositoryState>,
-      recentRepositories: ReadonlyArray<number>
+      pinnedRepositories: ReadonlyArray<number>
     ) =>
       repositories === null
         ? []
         : groupRepositories(
             repositories,
             localRepositoryStateLookup,
-            recentRepositories
+            pinnedRepositories
           )
   )
 
@@ -161,6 +167,8 @@ export class RepositoriesList extends React.Component<
         aheadBehind={item.aheadBehind}
         currentBranch={item.currentBranch}
         changedFilesCount={item.changedFilesCount}
+        isPinned={item.isPinned}
+        onSetPinned={this.props.onSetRepositoryPinned}
       />
     )
   }
@@ -279,11 +287,32 @@ export class RepositoriesList extends React.Component<
   private getItemAriaLabel = (item: IRepositoryListItem) =>
     formatRepositoryDisplayName(item.repository, item.currentBranch)
 
+  private getGroupAriaLabelGetter =
+    (
+      groups: ReadonlyArray<
+        IFilterListGroup<IRepositoryListItem, RepositoryListGroup>
+      >
+    ) =>
+    (group: number) =>
+      `${this.getGroupLabel(groups[group].identifier)} repositories`
+
+  private renderGroupHeader = (identifier: RepositoryListGroup) => {
+    return (
+      <div className="filter-list-group-header">
+        {this.getGroupLabel(identifier)}
+      </div>
+    )
+  }
+
+  private getGroupLabel(identifier: RepositoryListGroup) {
+    return identifier === 'pinned' ? 'Pinned' : 'Other'
+  }
+
   public render() {
     const groups = this.getRepositoryGroups(
       this.props.repositories,
       this.props.localRepositoryStateLookup,
-      this.props.recentRepositories
+      this.props.pinnedRepositories
     )
 
     // So there's two types of selection at play here. There's the repository
@@ -308,12 +337,15 @@ export class RepositoriesList extends React.Component<
           renderPostFilter={this.renderPostFilter}
           renderNoItems={this.renderNoItems}
           groups={groups}
+          renderGroupHeader={this.renderGroupHeader}
           invalidationProps={{
             repositories: this.props.repositories,
+            pinnedRepositories: this.props.pinnedRepositories,
             filterText: this.props.filterText,
           }}
           onItemContextMenu={this.onItemContextMenu}
           getItemAriaLabel={this.getItemAriaLabel}
+          getGroupAriaLabel={this.getGroupAriaLabelGetter(groups)}
           onSelectionChanged={this.onSelectionChanged}
         />
       </div>

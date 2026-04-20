@@ -371,6 +371,7 @@ import { getRepoHooks } from '../hooks/get-repo-hooks'
 const LastSelectedRepositoryIDKey = 'last-selected-repository-id'
 
 const RecentRepositoriesKey = 'recently-selected-repositories'
+const PinnedRepositoriesKey = 'pinned-repositories'
 /**
  *  maximum number of repositories shown in the "Recent" repositories group
  *  in the repository switcher dropdown
@@ -484,12 +485,18 @@ export const showChangesFilterKey = 'show-changes-filter'
 const selectedCopilotModelsKey = 'selected-copilot-models'
 export const showChangesFilterDefault = true
 
+const numberArraysEqual = (
+  a: ReadonlyArray<number>,
+  b: ReadonlyArray<number>
+) => a.length === b.length && a.every((value, index) => value === b[index])
+
 export class AppStore extends TypedBaseStore<IAppState> {
   private readonly gitStoreCache: GitStoreCache
 
   private accounts: ReadonlyArray<Account> = new Array<Account>()
   private repositories: ReadonlyArray<Repository> = new Array<Repository>()
   private recentRepositories: ReadonlyArray<number> = new Array<number>()
+  private pinnedRepositories: ReadonlyArray<number> = new Array<number>()
 
   private selectedRepository: Repository | CloningRepository | null = null
 
@@ -944,6 +951,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
     this.repositoriesStore.onDidUpdate(updateRepositories => {
       this.repositories = updateRepositories
+      this.syncPinnedRepositoriesWithTrackedRepositories()
       this.updateRepositorySelectionAfterRepositoriesChanged()
       this.emitUpdate()
     })
@@ -1074,6 +1082,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
       accounts: this.accounts,
       repositories,
       recentRepositories: this.recentRepositories,
+      pinnedRepositories: this.pinnedRepositories,
       localRepositoryStateLookup: this.localRepositoryStateLookup,
       windowState: this.windowState,
       windowZoomFactor: this.windowZoomFactor,
@@ -2015,6 +2024,27 @@ export class AppStore extends TypedBaseStore<IAppState> {
     this.emitUpdate()
   }
 
+  private getPinnedRepositoriesForTrackedRepositories(
+    pinnedRepositories: ReadonlyArray<number>
+  ): ReadonlyArray<number> {
+    const repositoryIds = new Set(this.repositories.map(repository => repository.id))
+
+    return [...new Set(pinnedRepositories)].filter(id => repositoryIds.has(id))
+  }
+
+  private syncPinnedRepositoriesWithTrackedRepositories() {
+    const nextPinnedRepositories = this.getPinnedRepositoriesForTrackedRepositories(
+      this.pinnedRepositories
+    )
+
+    if (numberArraysEqual(this.pinnedRepositories, nextPinnedRepositories)) {
+      return
+    }
+
+    setNumberArray(PinnedRepositoriesKey, nextPinnedRepositories)
+    this.pinnedRepositories = nextPinnedRepositories
+  }
+
   // finish `_selectRepository`s refresh tasks
   private async _selectRepositoryRefreshTasks(
     repository: Repository,
@@ -2229,6 +2259,14 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
     this.accounts = accounts
     this.repositories = repositories
+    const storedPinnedRepositories = getNumberArray(PinnedRepositoriesKey)
+    const pinnedRepositories = this.getPinnedRepositoriesForTrackedRepositories(
+      storedPinnedRepositories
+    )
+    this.pinnedRepositories = pinnedRepositories
+    if (!numberArraysEqual(storedPinnedRepositories, pinnedRepositories)) {
+      setNumberArray(PinnedRepositoriesKey, pinnedRepositories)
+    }
 
     this.updateRepositorySelectionAfterRepositoriesChanged()
 
@@ -4524,6 +4562,27 @@ export class AppStore extends TypedBaseStore<IAppState> {
     newAlias: string | null
   ): Promise<void> {
     return this.repositoriesStore.updateRepositoryAlias(repository, newAlias)
+  }
+
+  /** This shouldn't be called directly. See `Dispatcher`. */
+  public async _setRepositoryPinned(
+    repository: Repository,
+    pinned: boolean
+  ): Promise<void> {
+    const unpinnedRepositories = this.pinnedRepositories.filter(
+      id => id !== repository.id
+    )
+    const nextPinnedRepositories = pinned
+      ? [repository.id, ...unpinnedRepositories]
+      : unpinnedRepositories
+
+    if (numberArraysEqual(this.pinnedRepositories, nextPinnedRepositories)) {
+      return
+    }
+
+    setNumberArray(PinnedRepositoriesKey, nextPinnedRepositories)
+    this.pinnedRepositories = nextPinnedRepositories
+    this.emitUpdate()
   }
 
   /** This shouldn't be called directly. See `Dispatcher`. */

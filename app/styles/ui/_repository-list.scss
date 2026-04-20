@@ -65,6 +65,44 @@
     .alias {
       font-style: italic;
     }
+
+    .pin-repository-button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      margin-right: -16px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary-color);
+      cursor: pointer;
+      opacity: 0;
+      flex-shrink: 0;
+      pointer-events: none;
+
+      .octicon {
+        width: 16px;
+        height: 16px;
+      }
+
+      &.pinned,
+      &:focus-visible {
+        opacity: 1;
+        margin-right: var(--spacing-half);
+        color: var(--text-color);
+        pointer-events: auto;
+      }
+    }
+
+    &:hover {
+      .pin-repository-button {
+        opacity: 1;
+        margin-right: var(--spacing-half);
+        pointer-events: auto;
+      }
+    }
   }
 
   .filter-list-group-header {
@@ -166,11 +204,9 @@
 .repository-list,
 .repository-list-item-tooltip {
   .repo-indicators {
-    margin-left: auto;
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    margin-right: var(--spacing-half);
   }
 
   .change-indicator-wrapper {

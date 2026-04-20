@@ -9,7 +9,7 @@ import { IFilterListGroup, IFilterListItem } from '../lib/filter-list'
 import { IAheadBehind } from '../../models/branch'
 import { formatRepositoryDisplayName } from '../../lib/repository-display-name'
 
-export type RepositoryListGroup = 'all'
+export type RepositoryListGroup = 'pinned' | 'other'
 
 /**
  * Returns a unique grouping key (string) for a repository group. Doubles as a
@@ -25,6 +25,7 @@ export interface IRepositoryListItem extends IFilterListItem {
   readonly text: ReadonlyArray<string>
   readonly id: string
   readonly repository: Repositoryish
+  readonly isPinned: boolean
   readonly needsDisambiguation: boolean
   readonly aheadBehind: IAheadBehind | null
   readonly currentBranch: string | null
@@ -34,21 +35,38 @@ export interface IRepositoryListItem extends IFilterListItem {
 export function groupRepositories(
   repositories: ReadonlyArray<Repositoryish>,
   localRepositoryStateLookup: ReadonlyMap<number, ILocalRepositoryState>,
-  _recentRepositories: ReadonlyArray<number>
+  pinnedRepositories: ReadonlyArray<number>
 ): ReadonlyArray<IFilterListGroup<IRepositoryListItem, RepositoryListGroup>> {
-  return [
-    {
-      identifier: 'all',
-      items: toSortedListItems(repositories, localRepositoryStateLookup),
-    },
-  ]
+  const pinnedRepositoryIds = new Set(pinnedRepositories)
+  const items = toSortedListItems(
+    repositories,
+    localRepositoryStateLookup,
+    pinnedRepositoryIds
+  )
+  const pinnedItems = items.filter(item => item.isPinned)
+  const otherItems = items.filter(item => !item.isPinned)
+
+  const groups = new Array<
+    IFilterListGroup<IRepositoryListItem, RepositoryListGroup>
+  >()
+
+  if (pinnedItems.length > 0) {
+    groups.push({ identifier: 'pinned', items: pinnedItems })
+  }
+
+  if (otherItems.length > 0) {
+    groups.push({ identifier: 'other', items: otherItems })
+  }
+
+  return groups
 }
 
 const getDisplayTitle = (r: Repositoryish) => r.name
 
 const toSortedListItems = (
   repositories: ReadonlyArray<Repositoryish>,
-  localRepositoryStateLookup: ReadonlyMap<number, ILocalRepositoryState>
+  localRepositoryStateLookup: ReadonlyMap<number, ILocalRepositoryState>,
+  pinnedRepositoryIds: ReadonlySet<number>
 ): IRepositoryListItem[] => {
   const allNames = new Map<string, number>()
 
@@ -74,6 +92,7 @@ const toSortedListItems = (
             : [formatRepositoryDisplayName(r, repoState?.currentBranch)],
         id: r.id.toString(),
         repository: r,
+        isPinned: r instanceof Repository && pinnedRepositoryIds.has(r.id),
         needsDisambiguation: (allNames.get(title) ?? 0) > 1,
         aheadBehind: repoState?.aheadBehind ?? null,
         currentBranch: repoState?.currentBranch ?? null,

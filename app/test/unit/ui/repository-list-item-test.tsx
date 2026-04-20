@@ -51,6 +51,7 @@ describe('RepositoryListItem', () => {
         aheadBehind={{ ahead: 2, behind: 1 }}
         currentBranch={currentBranch}
         changedFilesCount={3}
+        isPinned={false}
       />
     )
 
@@ -80,6 +81,7 @@ describe('RepositoryListItem', () => {
         aheadBehind={null}
         currentBranch={currentBranch}
         changedFilesCount={0}
+        isPinned={false}
       />
     )
 
@@ -104,6 +106,7 @@ describe('RepositoryListItem', () => {
         aheadBehind={null}
         currentBranch={currentBranch}
         changedFilesCount={0}
+        isPinned={false}
       />
     )
 
@@ -143,11 +146,40 @@ describe('RepositoryListItem', () => {
         aheadBehind={null}
         currentBranch={currentBranch}
         changedFilesCount={0}
+        isPinned={false}
       />
     )
 
     const name = view.container.querySelector('.name')
 
     assert.equal(name?.textContent, `desktop - ${currentBranch}`)
+  })
+
+  it('pins the repository when the pin button is clicked', () => {
+    const repository = createRepository()
+    let pinnedRepository: Repository | null = null
+    let nextPinnedState: boolean | null = null
+    render(
+      <RepositoryListItem
+        repository={repository}
+        needsDisambiguation={false}
+        matches={noMatches}
+        aheadBehind={null}
+        currentBranch="main"
+        changedFilesCount={0}
+        isPinned={false}
+        onSetPinned={(repo, pinned) => {
+          pinnedRepository = repo
+          nextPinnedState = pinned
+        }}
+      />
+    )
+
+    const button = screen.getByRole('button', { name: 'Pin repository' })
+    fireEvent.mouseDown(button)
+    fireEvent.click(button)
+
+    assert.strictEqual(pinnedRepository, repository)
+    assert.equal(nextPinnedState, true)
   })
 })
