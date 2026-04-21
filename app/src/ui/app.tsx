@@ -146,6 +146,8 @@ import { CommitDragElement } from './drag-elements/commit-drag-element'
 import classNames from 'classnames'
 import { MoveToApplicationsFolder } from './move-to-applications-folder'
 import { ChangeRepositoryAlias } from './change-repository-alias/change-repository-alias-dialog'
+import { CreateShelfDialog } from './shelves/create-shelf-dialog'
+import { DeleteShelfDialog } from './shelves/delete-shelf-dialog'
 import { ThankYou } from './thank-you'
 import {
   getUserContributions,
@@ -2145,6 +2147,26 @@ export class App extends React.Component<IAppProps, IAppState> {
           <ChangeRepositoryAlias
             dispatcher={this.props.dispatcher}
             repository={popup.repository}
+            onDismissed={onPopupDismissedFn}
+          />
+        )
+      }
+      case PopupType.CreateShelf: {
+        return (
+          <CreateShelfDialog
+            dispatcher={this.props.dispatcher}
+            repository={popup.repository}
+            paths={popup.paths}
+            onDismissed={onPopupDismissedFn}
+          />
+        )
+      }
+      case PopupType.DeleteShelf: {
+        return (
+          <DeleteShelfDialog
+            dispatcher={this.props.dispatcher}
+            repository={popup.repository}
+            shelf={popup.shelf}
             onDismissed={onPopupDismissedFn}
           />
         )

@@ -23,6 +23,7 @@ import memoizeOne from 'memoize-one'
 import { getAuthors } from '../../lib/git/log'
 import { Repository } from '../../models/repository'
 import { formatDate } from '../../lib/format-date'
+import { IShelf } from '../../models/shelf'
 
 const RowHeight = 30
 
@@ -44,10 +45,16 @@ interface IBranchListProps {
    */
   readonly allBranches: ReadonlyArray<Branch>
 
+  /** Desktop shelf-prefixed branches tracked separately from normal branches. */
+  readonly shelfBranches?: ReadonlyArray<Branch>
+
   /**
    * See IBranchesState.recentBranches
    */
   readonly recentBranches: ReadonlyArray<Branch>
+
+  /** Active shelves currently shown in the Shelves UI. */
+  readonly shelves?: ReadonlyArray<IShelf>
 
   /**
    * The currently selected branch in the list, see the onSelectionChanged prop.
@@ -182,7 +189,9 @@ export class BranchList extends React.Component<
       this.props.defaultBranch,
       this.props.currentBranch,
       this.props.allBranches,
-      this.props.recentBranches
+      this.props.recentBranches,
+      this.props.shelfBranches ?? [],
+      this.props.shelves ?? []
     )
   }
 
@@ -204,7 +213,10 @@ export class BranchList extends React.Component<
   }
 
   public componentDidUpdate(prevProps: IBranchListProps) {
-    if (prevProps.allBranches !== this.props.allBranches) {
+    if (
+      prevProps.allBranches !== this.props.allBranches ||
+      prevProps.shelfBranches !== this.props.shelfBranches
+    ) {
       this.populateCommitDates()
     }
   }
@@ -212,7 +224,11 @@ export class BranchList extends React.Component<
   private populateCommitDates = () => {
     const cached = new Map<string, Date>()
     const missing = new Array<string>()
-    const uniqShas = new Set(this.props.allBranches.map(b => b.tip.sha))
+    const uniqShas = new Set(
+      [...this.props.allBranches, ...(this.props.shelfBranches ?? [])].map(b =>
+        b.tip.sha
+      )
+    )
 
     for (const sha of uniqShas) {
       const date = commitDateCache.get(sha)
@@ -349,6 +365,7 @@ export class BranchList extends React.Component<
     switch (label) {
       case 'default':
       case 'recent':
+      case 'shelves':
       case 'other':
         return label
       default:
@@ -383,6 +400,8 @@ export class BranchList extends React.Component<
       return __DARWIN__ ? 'Default Branch' : 'Default branch'
     } else if (identifier === 'recent') {
       return __DARWIN__ ? 'Recent Branches' : 'Recent branches'
+    } else if (identifier === 'shelves') {
+      return 'Shelves'
     } else if (identifier === 'other') {
       return __DARWIN__ ? 'Other Branches' : 'Other branches'
     } else {

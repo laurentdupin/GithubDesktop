@@ -231,6 +231,108 @@
   }
 }
 
+.desktop-shelves-section {
+  border-top: var(--base-border);
+  padding: var(--spacing-half) var(--spacing);
+
+  &.desktop-shelves-section--busy {
+    .desktop-shelf-actions {
+      pointer-events: none;
+    }
+  }
+
+  .desktop-shelves-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--spacing-half);
+    color: var(--text-secondary-color);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .desktop-shelves-count {
+    color: var(--text-tertiary-color);
+  }
+
+  .desktop-shelves-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-half);
+  }
+
+  .desktop-shelf-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing);
+    padding: var(--spacing-half);
+    border: 1px solid var(--box-border-color);
+    border-radius: var(--border-radius);
+    background-color: var(--background-color);
+  }
+
+  .desktop-shelf-details {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .desktop-shelf-name {
+    @include ellipsis;
+    color: var(--text-color);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .desktop-shelf-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-half);
+    margin-top: var(--spacing-quarter);
+    color: var(--text-secondary-color);
+    font-size: var(--font-size-sm);
+  }
+
+  .desktop-shelf-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-half);
+    flex-shrink: 0;
+
+    &.desktop-shelf-actions--disabled {
+      opacity: 0.6;
+    }
+  }
+
+  .desktop-shelf-action {
+    white-space: nowrap;
+  }
+
+  .desktop-shelf-link {
+    white-space: nowrap;
+  }
+
+  .desktop-shelf-delete-button {
+    color: var(--md-danger-fg-color);
+
+    &:not([aria-disabled='true']) {
+      border-color: color-mix(
+        in srgb,
+        var(--md-danger-fg-color) 45%,
+        var(--secondary-button-border-color)
+      );
+    }
+
+    &:not([aria-disabled='true']):hover,
+    &:not([aria-disabled='true']):focus {
+      background-color: color-mix(
+        in srgb,
+        var(--md-danger-fg-color) 10%,
+        var(--secondary-button-background)
+      );
+      border-color: var(--md-danger-fg-color);
+    }
+  }
+}
+
 .undo-enter {
   max-height: 0;
   overflow: hidden;

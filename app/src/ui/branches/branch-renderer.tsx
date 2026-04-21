@@ -21,6 +21,7 @@ export function renderDefaultBranch(
   return (
     <BranchListItem
       name={branch.name}
+      displayName={item.displayName}
       isCurrentBranch={branch.name === currentBranchName}
       authorDate={authorDate}
       matches={matches}
@@ -34,10 +35,8 @@ export function getDefaultAriaLabelForBranch(
   item: IBranchListItem,
   authorDate: Date | undefined
 ): string {
-  const branch = item.branch
-
   if (!authorDate) {
-    return branch.name
+    return item.displayName
   }
 
   const { relativeText, absoluteText } = getRelativeTimeInfoFromDate(
@@ -45,7 +44,7 @@ export function getDefaultAriaLabelForBranch(
     true
   )
 
-  return `${item.branch.name} ${
+  return `${item.displayName} ${
     getPreferAbsoluteDates() ? absoluteText : relativeText
   }`
 }

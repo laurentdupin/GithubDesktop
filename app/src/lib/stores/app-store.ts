@@ -158,6 +158,7 @@ import {
   abortMerge,
   addRemote,
   checkoutBranch,
+  createShelfBranchFromPaths,
   createCommit,
   getAuthorIdentity,
   getChangedFiles,
@@ -213,6 +214,7 @@ import {
   expandWorkingDirectoryWithSubmoduleChanges,
   getSubmoduleRepositoryWorkingDirectory,
   getSubmodulesToPush,
+  getShelves,
 } from '../git'
 import {
   installGlobalLFSFilters,
@@ -353,6 +355,11 @@ import {
   IForkSyncPreviewEntry,
   summarizeForkSyncPreviewEntries,
 } from '../../models/fork-sync'
+import {
+  filterOutDesktopShelfBranches,
+  isDesktopShelfBranch,
+  IShelf,
+} from '../../models/shelf'
 import { reorder } from '../git/reorder'
 import { UseWindowsOpenSSHKey } from '../ssh/ssh'
 import { isConflictsFlow } from '../multi-commit-operation'
@@ -509,6 +516,24 @@ const numberArraysEqual = (
   a: ReadonlyArray<number>,
   b: ReadonlyArray<number>
 ) => a.length === b.length && a.every((value, index) => value === b[index])
+
+const branchesEqual = (
+  a: ReadonlyArray<Branch>,
+  b: ReadonlyArray<Branch>
+) =>
+  a.length === b.length &&
+  a.every((branch, index) => {
+    const other = b[index]
+    return (
+      branch === other ||
+      (other !== undefined &&
+        branch.ref === other.ref &&
+        branch.name === other.name &&
+        branch.upstream === other.upstream &&
+        branch.tip.sha === other.tip.sha &&
+        branch.type === other.type)
+    )
+  })
 
 export class AppStore extends TypedBaseStore<IAppState> {
   private readonly gitStoreCache: GitStoreCache
@@ -1197,8 +1222,25 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
   private onGitStoreUpdated(repository: Repository, gitStore: GitStore) {
     const prevRepositoryState = this.repositoryStateCache.get(repository)
+    const visibleBranches = filterOutDesktopShelfBranches(gitStore.allBranches)
+    const shelfBranches = gitStore.allBranches.filter(isDesktopShelfBranch)
+    const visibleRecentBranches = filterOutDesktopShelfBranches(
+      gitStore.recentBranches
+    )
+    const visibleBranchesChanged = !branchesEqual(
+      prevRepositoryState.branchesState.allBranches,
+      visibleBranches
+    )
+    const shelfBranchesChanged = !branchesEqual(
+      prevRepositoryState.branchesState.shelfBranches,
+      shelfBranches
+    )
+    const visibleRecentBranchesChanged = !branchesEqual(
+      prevRepositoryState.branchesState.recentBranches,
+      visibleRecentBranches
+    )
     const invalidateForkSyncPreview =
-      prevRepositoryState.branchesState.allBranches !== gitStore.allBranches ||
+      visibleBranchesChanged ||
       !tipEquals(prevRepositoryState.branchesState.tip, gitStore.tip) ||
       !remoteEquals(prevRepositoryState.remote, gitStore.currentRemote) ||
       prevRepositoryState.lastFetched?.getTime() !==
@@ -1250,16 +1292,38 @@ export class AppStore extends TypedBaseStore<IAppState> {
         }
       }
 
-      return {
-        tip: gitStore.tip,
-        defaultBranch: gitStore.defaultBranch,
-        upstreamDefaultBranch: gitStore.upstreamDefaultBranch,
-        allBranches: gitStore.allBranches,
-        recentBranches: gitStore.recentBranches,
-        pullWithRebase: gitStore.pullWithRebase,
-        currentPullRequest,
-      }
-    })
+        return {
+          tip: gitStore.tip,
+          defaultBranch: gitStore.defaultBranch,
+          upstreamDefaultBranch: gitStore.upstreamDefaultBranch,
+          allBranches: visibleBranchesChanged
+            ? visibleBranches
+            : state.allBranches,
+          shelfBranches: shelfBranchesChanged
+            ? shelfBranches
+            : state.shelfBranches,
+          recentBranches: visibleRecentBranchesChanged
+            ? visibleRecentBranches
+            : state.recentBranches,
+          pullWithRebase: gitStore.pullWithRebase,
+          currentPullRequest,
+        }
+      })
+
+    const prevTip = prevRepositoryState.branchesState.tip
+    const currentTip = gitStore.tip
+    const shelfRelevantUpdate =
+      visibleBranchesChanged ||
+      shelfBranchesChanged ||
+      visibleRecentBranchesChanged ||
+      prevRepositoryState.changesState.shelves.length > 0 ||
+      (prevTip.kind === TipState.Valid && isDesktopShelfBranch(prevTip.branch)) ||
+      (currentTip.kind === TipState.Valid &&
+        isDesktopShelfBranch(currentTip.branch))
+
+    if (shelfRelevantUpdate) {
+      void this.loadShelvesIntoChangesState(repository)
+    }
 
     let selectWorkingDirectory = false
     let selectStashEntry = false
@@ -3848,6 +3912,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
     await Promise.all([
       gitStore.updateLastFetched(),
       gitStore.loadStashEntries(),
+      this.loadShelvesIntoChangesState(repository),
       this._refreshAuthor(repository),
       this._refreshHasCommitHooks(repository),
       refreshSectionPromise,
@@ -8023,6 +8088,56 @@ export class AppStore extends TypedBaseStore<IAppState> {
     return createDesktopStashEntry(repository, branch, untrackedFiles)
   }
 
+  private async loadShelvesIntoChangesState(repository: Repository) {
+    let shelves = await getShelves(repository).catch(error => {
+      log.error(`Failed to load shelves for ${repository.path}`, error)
+      return []
+    })
+
+    const state = this.repositoryStateCache.get(repository)
+    const { tip } = state.branchesState
+    const hasWorkingDirectoryChanges =
+      state.changesState.workingDirectory.files.length > 0
+
+    if (
+      tip.kind === TipState.Valid &&
+      hasWorkingDirectoryChanges &&
+      isDesktopShelfBranch(tip.branch)
+    ) {
+      shelves = shelves.filter(
+        shelf => shelf.branchName !== tip.branch.nameWithoutRemote
+      )
+    }
+
+    this.repositoryStateCache.updateChangesState(repository, () => ({
+      shelves,
+    }))
+
+    if (this.selectedRepository === repository) {
+      this.emitUpdate()
+    }
+  }
+
+  private async getShelfRemote(
+    repository: Repository,
+    remoteName: string
+  ): Promise<IRemote | null> {
+    const gitStore = this.gitStoreCache.get(repository)
+    if (gitStore.remotes.length === 0) {
+      await gitStore.loadRemotes()
+    }
+
+    return (
+      gitStore.remotes.find(remote => remote.name === remoteName) ??
+      (await getRemoteURL(repository, remoteName)
+        .then(url => (url ? { name: remoteName, url } : null))
+        .catch(error => {
+          log.error(`Could not determine remote URL for ${remoteName}`, error)
+          return null
+        }))
+    )
+  }
+
   /** This shouldn't be called directly. See `Dispatcher`. */
   public async _popStashEntry(repository: Repository, stashEntry: IStashEntry) {
     await popStashEntry(repository, stashEntry.stashSha)
@@ -8049,6 +8164,89 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
     this.statsStore.increment('stashDiscardCount')
     await gitStore.loadStashEntries()
+  }
+
+  public async _createShelf(
+    repository: Repository,
+    paths: ReadonlyArray<string>,
+    shelfName: string,
+    publish: boolean
+  ): Promise<void> {
+    const { branchesState } = this.repositoryStateCache.get(repository)
+    const { tip } = branchesState
+
+    if (tip.kind !== TipState.Valid) {
+      throw new Error('Shelves can only be created while a branch is checked out.')
+    }
+
+    const branchName = await createShelfBranchFromPaths(
+      repository,
+      tip.branch,
+      paths,
+      shelfName
+    )
+
+    if (publish) {
+      const remoteName =
+        tip.branch.upstreamRemoteName ??
+        this.gitStoreCache.get(repository).defaultRemote?.name
+
+      if (remoteName !== null && remoteName !== undefined) {
+        try {
+          await this._publishShelf(repository, branchName, remoteName)
+        } catch (error) {
+          log.error(`Failed to publish shelf ${branchName}`, error)
+          this.emitError(
+            error instanceof Error
+              ? error
+              : new Error(`Failed to publish shelf ${branchName}.`)
+          )
+        }
+      }
+    }
+
+    await this._refreshRepository(repository)
+  }
+
+  public async _publishShelf(
+    repository: Repository,
+    shelfBranchName: string,
+    remoteName?: string
+  ): Promise<void> {
+    const gitStore = this.gitStoreCache.get(repository)
+    const state = this.repositoryStateCache.get(repository)
+    const tip = state.branchesState.tip
+    const resolvedRemoteName =
+      remoteName ??
+      (tip.kind === TipState.Valid ? tip.branch.upstreamRemoteName : null) ??
+      gitStore.defaultRemote?.name
+
+    if (resolvedRemoteName === null || resolvedRemoteName === undefined) {
+      throw new Error('Unable to publish shelf because the repository has no remote.')
+    }
+
+    const remote = await this.getShelfRemote(repository, resolvedRemoteName)
+    if (remote === null) {
+      throw new Error(`Unable to find remote "${resolvedRemoteName}" for publishing shelves.`)
+    }
+
+    await pushRepo(repository, remote, shelfBranchName, null, null)
+    await this._refreshRepository(repository)
+  }
+
+  public async _deleteShelf(repository: Repository, shelf: IShelf): Promise<void> {
+    if (shelf.localRef !== null) {
+      await deleteLocalBranch(repository, shelf.branchName)
+    }
+
+    if (shelf.remoteName !== null) {
+      const remote = await this.getShelfRemote(repository, shelf.remoteName)
+      if (remote !== null) {
+        await deleteRemoteBranch(repository, remote, shelf.branchName)
+      }
+    }
+
+    await this._refreshRepository(repository)
   }
 
   /** This shouldn't be called directly. See `Dispatcher`. */

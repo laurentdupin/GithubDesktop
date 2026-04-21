@@ -38,6 +38,7 @@ import { IAccountRepositories } from './stores/api-repositories-store'
 import { ManualConflictResolution } from '../models/manual-conflict-resolution'
 import { Banner } from '../models/banner'
 import { IStashEntry } from '../models/stash-entry'
+import { IShelf, IShelfActionProgress } from '../models/shelf'
 import { TutorialStep } from '../models/tutorial-step'
 import { UncommittedChangesStrategy } from '../models/uncommitted-changes-strategy'
 import { DragElement } from '../models/drag-drop'
@@ -683,6 +684,13 @@ export interface IBranchesState {
   readonly allBranches: ReadonlyArray<Branch>
 
   /**
+   * Branches using the reserved Desktop shelf prefix. These are tracked
+   * separately so shelf branches can be shown in the branch dropdown without
+   * polluting normal branch flows elsewhere in the app.
+   */
+  readonly shelfBranches: ReadonlyArray<Branch>
+
+  /**
    * A list of zero to a few (at time of writing 5 but check loadRecentBranches
    * in git-store for definitive answer) branches that have been checked out
    * recently. This list is compiled by reading the reflog and tracking branch
@@ -823,6 +831,12 @@ export interface IChangesState {
    * if no stash exists for the current branch.
    */
   readonly stashEntry: IStashEntry | null
+
+  /** Branch-backed shelves available for the repository. */
+  readonly shelves: ReadonlyArray<IShelf>
+
+  /** A shelf publish/unshelve action currently in flight for the repository. */
+  readonly shelfActionInProgress: IShelfActionProgress | null
 
   /**
    * The current selection state in the Changes view. Can be either

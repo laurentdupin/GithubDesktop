@@ -38,6 +38,7 @@ import {
   getRebaseSnapshot,
   getRepositoryType,
   updateSubmodulesAfterOperation,
+  applyShelfToWorkingDirectory,
 } from '../../lib/git'
 import { isGitOnPath } from '../../lib/is-git-on-path'
 import {
@@ -109,6 +110,7 @@ import {
 import { MergeTreeResult } from '../../models/merge'
 import { UncommittedChangesStrategy } from '../../models/uncommitted-changes-strategy'
 import { IStashEntry } from '../../models/stash-entry'
+import { IShelf } from '../../models/shelf'
 import { WorkflowPreferences } from '../../models/workflow-preferences'
 import { resolveWithin } from '../../lib/path'
 import { CherryPickResult } from '../../lib/git/cherry-pick'
@@ -2730,6 +2732,94 @@ export class Dispatcher {
   /** Pop the given stash in the given repository */
   public popStash(repository: Repository, stashEntry: IStashEntry) {
     return this.appStore._popStashEntry(repository, stashEntry)
+  }
+
+  public showCreateShelfDialog(
+    repository: Repository,
+    paths: ReadonlyArray<string>
+  ) {
+    return this.showPopup({
+      type: PopupType.CreateShelf,
+      repository,
+      paths,
+    })
+  }
+
+  public showDeleteShelfDialog(repository: Repository, shelf: IShelf) {
+    return this.showPopup({
+      type: PopupType.DeleteShelf,
+      repository,
+      shelf,
+    })
+  }
+
+  public createShelf(
+    repository: Repository,
+    paths: ReadonlyArray<string>,
+    shelfName: string,
+    publish: boolean
+  ) {
+    return this.appStore._createShelf(repository, paths, shelfName, publish)
+  }
+
+  public publishShelf(
+    repository: Repository,
+    shelfBranchName: string,
+    remoteName?: string,
+    shelfId?: string
+  ) {
+    return this.performShelfAction(
+      repository,
+      { kind: 'publishing', shelfId: shelfId ?? shelfBranchName },
+      () => this.appStore._publishShelf(repository, shelfBranchName, remoteName)
+    )
+  }
+
+  public deleteShelf(repository: Repository, shelf: IShelf) {
+    return this.appStore._deleteShelf(repository, shelf)
+  }
+
+  public async unshelveShelf(repository: Repository, shelf: IShelf) {
+    return this.performShelfAction(
+      repository,
+      { kind: 'unshelving', shelfId: shelf.id },
+      async () => {
+        const { branchesState } = this.repositoryStateManager.get(repository)
+        const { tip } = branchesState
+        if (tip.kind !== TipState.Valid) {
+          throw new Error(
+            'Shelves can only be unshelved onto a checked out branch.'
+          )
+        }
+
+        const result = await applyShelfToWorkingDirectory(repository, shelf)
+
+        if (result === 'applied') {
+          await this.deleteShelf(repository, shelf)
+          return
+        }
+
+        await this.refreshRepository(repository)
+      }
+    )
+  }
+
+  private async performShelfAction<T>(
+    repository: Repository,
+    action: { kind: 'publishing' | 'unshelving'; shelfId: string },
+    fn: () => Promise<T>
+  ): Promise<T> {
+    this.repositoryStateManager.updateChangesState(repository, () => ({
+      shelfActionInProgress: action,
+    }))
+
+    try {
+      return await fn()
+    } finally {
+      this.repositoryStateManager.updateChangesState(repository, () => ({
+        shelfActionInProgress: null,
+      }))
+    }
   }
 
   /**

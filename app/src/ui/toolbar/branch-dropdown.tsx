@@ -98,16 +98,18 @@ export class BranchDropdown extends React.Component<IBranchDropdownProps> {
 
     const tip = repositoryState.branchesState.tip
     const currentBranch = tip.kind === TipState.Valid ? tip.branch : null
-    return (
-      <BranchesContainer
-        allBranches={branchesState.allBranches}
-        recentBranches={branchesState.recentBranches}
-        currentBranch={currentBranch}
-        defaultBranch={branchesState.defaultBranch}
-        dispatcher={this.props.dispatcher}
-        repository={this.props.repository}
-        selectedTab={this.props.selectedTab}
-        pullRequests={this.props.pullRequests}
+      return (
+        <BranchesContainer
+          allBranches={branchesState.allBranches}
+          shelfBranches={branchesState.shelfBranches}
+          recentBranches={branchesState.recentBranches}
+          currentBranch={currentBranch}
+          defaultBranch={branchesState.defaultBranch}
+          shelves={repositoryState.changesState.shelves}
+          dispatcher={this.props.dispatcher}
+          repository={this.props.repository}
+          selectedTab={this.props.selectedTab}
+          pullRequests={this.props.pullRequests}
         currentPullRequest={this.props.currentPullRequest}
         isLoadingPullRequests={this.props.isLoadingPullRequests}
         emoji={this.props.emoji}

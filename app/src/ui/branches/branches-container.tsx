@@ -8,6 +8,7 @@ import {
 import { Branch } from '../../models/branch'
 import { BranchesTab } from '../../models/branches-tab'
 import { PopupType } from '../../models/popup'
+import { IShelf } from '../../models/shelf'
 
 import { Dispatcher } from '../dispatcher'
 import { FoldoutType } from '../../lib/app-state'
@@ -44,9 +45,11 @@ interface IBranchesContainerProps {
   readonly repository: Repository
   readonly selectedTab: BranchesTab
   readonly allBranches: ReadonlyArray<Branch>
+  readonly shelfBranches: ReadonlyArray<Branch>
   readonly defaultBranch: Branch | null
   readonly currentBranch: Branch | null
   readonly recentBranches: ReadonlyArray<Branch>
+  readonly shelves: ReadonlyArray<IShelf>
   readonly pullRequests: ReadonlyArray<PullRequest>
   readonly onRenameBranch: (branchName: string) => void
   readonly onDeleteBranch: (branchName: string) => void
@@ -273,7 +276,9 @@ export class BranchesContainer extends React.Component<
             defaultBranch={this.props.defaultBranch}
             currentBranch={this.props.currentBranch}
             allBranches={this.props.allBranches}
+            shelfBranches={this.props.shelfBranches}
             recentBranches={this.props.recentBranches}
+            shelves={this.props.shelves}
             onItemClick={this.onBranchItemClick}
             filterText={this.state.branchFilterText}
             onFilterTextChanged={this.onBranchFilterTextChanged}

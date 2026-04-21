@@ -27,6 +27,7 @@ import { ISecretScanResult } from '../ui/secret-scanning/push-protection-error-d
 import { BypassReasonType } from '../ui/secret-scanning/bypass-push-protection-dialog'
 import { TerminalOutput, TerminalOutputListener } from '../lib/git'
 import { IForkSyncSummary } from './fork-sync'
+import { IShelf } from './shelf'
 
 export enum PopupType {
   RenameBranch = 'RenameBranch',
@@ -110,6 +111,8 @@ export enum PopupType {
   CommitProgress = 'CommitProgress',
   ForkSyncPreview = 'ForkSyncPreview',
   ForkSyncSummary = 'ForkSyncSummary',
+  CreateShelf = 'CreateShelf',
+  DeleteShelf = 'DeleteShelf',
 }
 
 interface IBasePopup {
@@ -257,6 +260,16 @@ export type PopupDetail =
       type: PopupType.ConfirmDiscardStash
       repository: Repository
       stash: IStashEntry
+    }
+  | {
+      type: PopupType.CreateShelf
+      repository: Repository
+      paths: ReadonlyArray<string>
+    }
+  | {
+      type: PopupType.DeleteShelf
+      repository: Repository
+      shelf: IShelf
     }
   | {
       type: PopupType.ConfirmCheckoutCommit

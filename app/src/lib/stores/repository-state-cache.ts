@@ -316,6 +316,8 @@ function getInitialRepositoryState(): IRepositoryState {
       showCoAuthoredBy: false,
       conflictState: null,
       stashEntry: null,
+      shelves: [],
+      shelfActionInProgress: null,
       currentBranchProtected: false,
       currentRepoRulesInfo: new RepoRulesInfo(),
       fileListFilter: {
@@ -328,16 +330,17 @@ function getInitialRepositoryState(): IRepositoryState {
       },
     },
     selectedSection: RepositorySectionTab.Changes,
-    branchesState: {
-      tip: { kind: TipState.Unknown },
-      defaultBranch: null,
-      upstreamDefaultBranch: null,
-      allBranches: new Array<Branch>(),
-      recentBranches: new Array<Branch>(),
-      openPullRequests: new Array<PullRequest>(),
-      currentPullRequest: null,
-      isLoadingPullRequests: false,
-      forcePushBranches: new Map<string, string>(),
+      branchesState: {
+        tip: { kind: TipState.Unknown },
+        defaultBranch: null,
+        upstreamDefaultBranch: null,
+        allBranches: new Array<Branch>(),
+        shelfBranches: new Array<Branch>(),
+        recentBranches: new Array<Branch>(),
+        openPullRequests: new Array<PullRequest>(),
+        currentPullRequest: null,
+        isLoadingPullRequests: false,
+        forcePushBranches: new Map<string, string>(),
     },
     compareState: {
       formState: {

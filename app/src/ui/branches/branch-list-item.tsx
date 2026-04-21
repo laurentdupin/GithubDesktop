@@ -15,8 +15,11 @@ import { getPreferAbsoluteDates } from '../../models/formatting-preferences'
 import { formatDate } from '../../lib/format-date'
 
 interface IBranchListItemProps {
-  /** The name of the branch */
+  /** The canonical branch name used for actions such as checkout and DnD. */
   readonly name: string
+
+  /** The user-facing branch label rendered in the list. */
+  readonly displayName?: string
 
   /** Specifies whether this item is currently selected */
   readonly isCurrentBranch: boolean
@@ -93,7 +96,8 @@ export class BranchListItem extends React.Component<
   }
 
   public render() {
-    const { authorDate, isCurrentBranch, name } = this.props
+    const { authorDate, isCurrentBranch } = this.props
+    const displayName = this.props.displayName ?? this.props.name
 
     const icon = isCurrentBranch ? octicons.check : octicons.gitBranch
     const className = classNames('branches-list-item', {
@@ -115,12 +119,15 @@ export class BranchListItem extends React.Component<
         <Octicon className="icon" symbol={icon} />
         <TooltippedContent
           className="name"
-          tooltip={name}
+          tooltip={displayName}
           onlyWhenOverflowed={true}
           tagName="div"
           disabled={enableAccessibleListToolTips()}
         >
-          <HighlightText text={name} highlight={this.props.matches.title} />
+          <HighlightText
+            text={displayName}
+            highlight={this.props.matches.title}
+          />
         </TooltippedContent>
         {authorDate &&
           (getPreferAbsoluteDates() ? (

@@ -80,6 +80,8 @@ import {
 import { ChangesListFilterOptions } from './changes-list-filter-options'
 import { HookProgress } from '../../lib/git'
 import { formatNumber } from '../../lib/format-number'
+import { IShelf, IShelfActionProgress } from '../../models/shelf'
+import { ShelvesSection } from '../shelves/shelves-section'
 
 export interface IChangesListItem extends IFilterListItem {
   readonly id: string
@@ -208,6 +210,8 @@ interface IFilterChangesListProps {
   readonly externalEditorLabel?: string
 
   readonly stashEntry: IStashEntry | null
+  readonly shelves: ReadonlyArray<IShelf>
+  readonly shelfActionInProgress: IShelfActionProgress | null
 
   readonly isShowingStashEntry: boolean
 
@@ -544,11 +548,11 @@ export class FilterChangesList extends React.Component<
     const label =
       files.length === 1
         ? __DARWIN__
-          ? `Discard Changes`
-          : `Discard changes`
+          ? `Discard Changes In This File`
+          : `Discard changes in this file`
         : __DARWIN__
-        ? `Discard ${files.length} Selected Changes`
-        : `Discard ${files.length} selected changes`
+        ? `Discard Changes In ${files.length} Selected Files`
+        : `Discard changes in ${files.length} selected files`
 
     return this.props.askForConfirmationOnDiscardChanges ? `${label}…` : label
   }
@@ -562,11 +566,18 @@ export class FilterChangesList extends React.Component<
     }
 
     const hasLocalChanges = this.props.workingDirectory.files.length > 0
+    const allShelveablePaths = this.getCommitCandidateFiles(
+      this.props.workingDirectory.files
+    ).map(file => file.path)
+    const hasShelveableChanges = allShelveablePaths.length > 0
     const hasStash = this.props.stashEntry !== null
     const hasConflicts =
       this.props.conflictState !== null ||
       hasConflictedFiles(this.props.workingDirectory)
 
+    const shelveAllChangesLabel = __DARWIN__
+      ? 'Shelve All Changes...'
+      : 'Shelve all changes...'
     const stashAllChangesLabel = __DARWIN__
       ? 'Stash All Changes'
       : 'Stash all changes'
@@ -579,6 +590,18 @@ export class FilterChangesList extends React.Component<
         label: __DARWIN__ ? 'Discard All Changes…' : 'Discard all changes…',
         action: this.onDiscardAllChanges,
         enabled: hasLocalChanges,
+      },
+      {
+        label: shelveAllChangesLabel,
+        action: () =>
+          this.props.dispatcher.showCreateShelfDialog(
+            this.props.repository,
+            allShelveablePaths
+          ),
+        enabled:
+          hasShelveableChanges &&
+          this.props.branch !== null &&
+          !hasConflicts,
       },
       {
         label: hasStash ? confirmStashAllChangesLabel : stashAllChangesLabel,
@@ -735,8 +758,28 @@ export class FilterChangesList extends React.Component<
       addItemToArray(id)
     }
 
+    const shelveMenuLabel =
+      paths.length === 1
+        ? __DARWIN__
+          ? 'Shelve This File...'
+          : 'Shelve this file...'
+        : __DARWIN__
+        ? `Shelve ${paths.length} Selected Files...`
+        : `Shelve ${paths.length} selected files...`
+
     const items: IMenuItem[] = [
       this.getDiscardChangesMenuItem(paths),
+      {
+        label: shelveMenuLabel,
+        action: () =>
+          this.props.dispatcher.showCreateShelfDialog(this.props.repository, paths),
+        enabled:
+          paths.length > 0 &&
+          this.props.rebaseConflictState === null &&
+          this.props.conflictState === null &&
+          !hasConflictedFiles(this.props.workingDirectory) &&
+          !this.props.isCommitting,
+      },
       { type: 'separator' },
     ]
     if (paths.length === 1) {
@@ -1179,6 +1222,24 @@ export class FilterChangesList extends React.Component<
     )
   }
 
+  private renderShelves() {
+    const canUnshelve =
+      this.props.branch !== null &&
+      this.props.rebaseConflictState === null &&
+      this.props.conflictState === null
+
+    return (
+      <ShelvesSection
+        dispatcher={this.props.dispatcher}
+        repository={this.props.repository}
+        shelves={this.props.shelves}
+        shelfActionInProgress={this.props.shelfActionInProgress}
+        canUnshelve={canUnshelve}
+        isBusy={this.props.isCommitting}
+      />
+    )
+  }
+
   private onChangedFileDoubleClick = (item: IChangesListItem) => {
     this.props.onOpenItemInExternalEditor(item.change.path)
   }
@@ -1435,6 +1496,7 @@ export class FilterChangesList extends React.Component<
           />
         </div>
         {this.renderStashedChanges()}
+        {this.renderShelves()}
         {this.renderHiddenChangesWarning()}
         {this.renderCommitMessageForm()}
       </>
