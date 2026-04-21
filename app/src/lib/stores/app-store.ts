@@ -359,6 +359,7 @@ import {
   filterOutDesktopShelfBranches,
   isDesktopShelfBranch,
   IShelf,
+  IShelfActionProgress,
 } from '../../models/shelf'
 import { reorder } from '../git/reorder'
 import { UseWindowsOpenSSHKey } from '../ssh/ssh'
@@ -8247,6 +8248,16 @@ export class AppStore extends TypedBaseStore<IAppState> {
     }
 
     await this._refreshRepository(repository)
+  }
+
+  public _setShelfActionInProgress(
+    repository: Repository,
+    action: IShelfActionProgress | null
+  ) {
+    this.repositoryStateCache.updateChangesState(repository, () => ({
+      shelfActionInProgress: action,
+    }))
+    this.emitUpdate()
   }
 
   /** This shouldn't be called directly. See `Dispatcher`. */

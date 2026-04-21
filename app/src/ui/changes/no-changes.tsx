@@ -32,7 +32,6 @@ import {
 } from '../../models/pull-request'
 import { KeyboardShortcut } from '../keyboard-shortcut/keyboard-shortcut'
 import { formatNumber } from '../../lib/format-number'
-import { ShelvesSection } from '../shelves/shelves-section'
 
 function formatMenuItemLabel(text: string) {
   if (__WIN32__ || __LINUX__) {
@@ -733,12 +732,6 @@ export class NoChanges extends React.Component<
     this.props.dispatcher.incrementMetric('suggestedStepCreatePullRequest')
 
   private renderActions() {
-    const { changesState, branchesState, isPushPullFetchInProgress } =
-      this.props.repositoryState
-    const canUnshelve =
-      branchesState.tip.kind === TipState.Valid &&
-      changesState.conflictState === null
-
     return (
       <>
         <SuggestedActionGroup
@@ -753,14 +746,6 @@ export class NoChanges extends React.Component<
           {this.renderShowInFileManager()}
           {this.renderViewOnGitHub()}
         </SuggestedActionGroup>
-        <ShelvesSection
-          dispatcher={this.props.dispatcher}
-          repository={this.props.repository}
-          shelves={changesState.shelves}
-          shelfActionInProgress={changesState.shelfActionInProgress}
-          canUnshelve={canUnshelve}
-          isBusy={isPushPullFetchInProgress}
-        />
       </>
     )
   }

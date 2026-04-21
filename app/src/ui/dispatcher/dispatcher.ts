@@ -2809,16 +2809,12 @@ export class Dispatcher {
     action: { kind: 'publishing' | 'unshelving'; shelfId: string },
     fn: () => Promise<T>
   ): Promise<T> {
-    this.repositoryStateManager.updateChangesState(repository, () => ({
-      shelfActionInProgress: action,
-    }))
+    this.appStore._setShelfActionInProgress(repository, action)
 
     try {
       return await fn()
     } finally {
-      this.repositoryStateManager.updateChangesState(repository, () => ({
-        shelfActionInProgress: null,
-      }))
+      this.appStore._setShelfActionInProgress(repository, null)
     }
   }
 

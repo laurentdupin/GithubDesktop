@@ -82,6 +82,7 @@ import { HookProgress } from '../../lib/git'
 import { formatNumber } from '../../lib/format-number'
 import { IShelf, IShelfActionProgress } from '../../models/shelf'
 import { ShelvesSection } from '../shelves/shelves-section'
+import { getShelvesSectionState } from '../shelves/shelves-state'
 
 export interface IChangesListItem extends IFilterListItem {
   readonly id: string
@@ -166,6 +167,7 @@ interface IFilterChangesListProps {
   readonly dispatcher: Dispatcher
   readonly availableWidth: number
   readonly isCommitting: boolean
+  readonly isPushPullFetchInProgress: boolean
   readonly hookProgress: HookProgress | null
   readonly onShowCommitProgress?: (() => void) | undefined
   readonly isGeneratingCommitMessage: boolean
@@ -1223,10 +1225,12 @@ export class FilterChangesList extends React.Component<
   }
 
   private renderShelves() {
-    const canUnshelve =
-      this.props.branch !== null &&
-      this.props.rebaseConflictState === null &&
-      this.props.conflictState === null
+    const { canUnshelve, isBusy } = getShelvesSectionState({
+      hasCheckedOutBranch: this.props.branch !== null,
+      conflictState: this.props.conflictState,
+      isCommitting: this.props.isCommitting,
+      isPushPullFetchInProgress: this.props.isPushPullFetchInProgress,
+    })
 
     return (
       <ShelvesSection
@@ -1235,7 +1239,7 @@ export class FilterChangesList extends React.Component<
         shelves={this.props.shelves}
         shelfActionInProgress={this.props.shelfActionInProgress}
         canUnshelve={canUnshelve}
-        isBusy={this.props.isCommitting}
+        isBusy={isBusy}
       />
     )
   }
