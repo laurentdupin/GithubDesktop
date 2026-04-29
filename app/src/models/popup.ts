@@ -28,6 +28,7 @@ import { BypassReasonType } from '../ui/secret-scanning/bypass-push-protection-d
 import { TerminalOutput, TerminalOutputListener } from '../lib/git'
 import { IForkSyncSummary } from './fork-sync'
 import { IShelf } from './shelf'
+import type { IBYOKModel, IBYOKProvider } from '../lib/copilot/byok'
 
 export enum PopupType {
   RenameBranch = 'RenameBranch',
@@ -113,6 +114,9 @@ export enum PopupType {
   ForkSyncSummary = 'ForkSyncSummary',
   CreateShelf = 'CreateShelf',
   DeleteShelf = 'DeleteShelf',
+  EditCopilotBYOKProvider = 'EditCopilotBYOKProvider',
+  EditCopilotBYOKModel = 'EditCopilotBYOKModel',
+  ConfirmDeleteCopilotBYOKProvider = 'ConfirmDeleteCopilotBYOKProvider',
 }
 
 interface IBasePopup {
@@ -150,6 +154,20 @@ export type PopupDetail =
       selection: DiffSelection
     }
   | { type: PopupType.Preferences; initialSelectedTab?: PreferencesTab }
+  | {
+      type: PopupType.EditCopilotBYOKProvider
+      provider: IBYOKProvider | null
+    }
+  | {
+      type: PopupType.EditCopilotBYOKModel
+      model: IBYOKModel | null
+      otherModelIds: ReadonlyArray<string>
+      onSave: (model: IBYOKModel) => void
+    }
+  | {
+      type: PopupType.ConfirmDeleteCopilotBYOKProvider
+      provider: IBYOKProvider
+    }
   | {
       type: PopupType.RepositorySettings
       repository: Repository
@@ -504,4 +522,5 @@ export type PopupDetail =
       repository: Repository
       summary: IForkSyncSummary
     }
+
 export type Popup = IBasePopup & PopupDetail
