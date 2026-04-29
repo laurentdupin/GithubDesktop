@@ -350,6 +350,17 @@ dialog {
       border-top: 1px solid var(--dialog-banner-success-border-color);
       border-bottom: 1px solid var(--dialog-banner-success-border-color);
     }
+
+    &.dialog-warning {
+      color: var(--text-color);
+      background: var(--box-alt-background-color);
+      border-top: var(--base-border);
+      border-bottom: var(--base-border);
+
+      > .octicon {
+        fill: var(--dialog-warning-color);
+      }
+    }
   }
 
   &#app-error {

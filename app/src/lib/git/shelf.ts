@@ -21,6 +21,11 @@ interface IStashReference {
   readonly sha: string
 }
 
+export interface ICreateShelfResult {
+  readonly branchName: string
+  readonly cleanupWarning: string | null
+}
+
 export type ApplyShelfResult = 'applied' | 'conflicts'
 
 export function stashSubjectMatchesMessage(subject: string, message: string) {
@@ -118,7 +123,7 @@ export async function createShelfBranchFromPaths(
   currentBranch: Branch,
   selectedPaths: ReadonlyArray<string>,
   shelfName: string
-): Promise<string> {
+): Promise<ICreateShelfResult> {
   if (selectedPaths.length === 0) {
     throw new Error('No files were selected to shelve.')
   }
@@ -132,6 +137,7 @@ export async function createShelfBranchFromPaths(
   )
 
   let stashRef: IStashReference | null = null
+  let cleanupWarning: string | null = null
   let branchCreated = false
   let deleteCreatedBranch = false
 
@@ -146,12 +152,31 @@ export async function createShelfBranchFromPaths(
       ...selectedPaths,
     ]
 
-    const stashResult = await git(stashArgs, repository.path, 'createShelfStash')
-    if (stashResult.stdout === 'No local changes to save\n') {
+    const stashResult = await git(
+      stashArgs,
+      repository.path,
+      'createShelfStash'
+    ).catch(async error => {
+      stashRef = await findStashReference(repository, stashMessage)
+
+      if (stashRef === null) {
+        throw error
+      }
+
+      cleanupWarning = getShelfCleanupWarning(error)
+      log.warn(
+        `Git created shelf stash ${stashRef.sha} but failed while removing the selected changes from ${repository.path}. Continuing shelf creation from the preserved stash.`,
+        error
+      )
+
+      return null
+    })
+
+    if (stashResult?.stdout.trim() === 'No local changes to save') {
       throw new Error('There were no selected file changes to shelve.')
     }
 
-    stashRef = await findStashReference(repository, stashMessage)
+    stashRef ??= await findStashReference(repository, stashMessage)
     if (stashRef === null) {
       throw new Error('Unable to locate the newly created shelf stash.')
     }
@@ -192,20 +217,28 @@ export async function createShelfBranchFromPaths(
       { stdin: commitMessage }
     )
 
-    await dropStashReference(repository, stashRef.ref)
+    await dropStashReference(repository, stashRef.ref).catch(error =>
+      log.warn('Failed to drop intermediate shelf stash after shelf creation', error)
+    )
     stashRef = null
 
-    return branchName
+    return { branchName, cleanupWarning }
   } catch (error) {
     deleteCreatedBranch = branchCreated
 
     if (stashRef !== null) {
-      await restoreShelfStash(repository, stashRef).catch(restoreError => {
-        log.error(
-          `Failed to restore shelved changes after shelf creation error: ${error}`
+      if (cleanupWarning === null) {
+        await restoreShelfStash(repository, stashRef).catch(restoreError => {
+          log.error(
+            `Failed to restore shelved changes after shelf creation error: ${error}`
+          )
+          log.error(restoreError)
+        })
+      } else {
+        log.warn(
+          `Leaving shelf stash ${stashRef.sha} in place after shelf creation failed because Git had already reported a cleanup problem.`
         )
-        log.error(restoreError)
-      })
+      }
     }
 
     throw error
@@ -232,6 +265,27 @@ export async function createShelfBranchFromPaths(
       maxRetries: 3,
     })
   }
+}
+
+function getShelfCleanupWarning(error: unknown) {
+  const details =
+    error instanceof GitError
+      ? `${error.result.stderr}\n${error.result.stdout}`
+      : error instanceof Error
+        ? error.message
+        : `${error}`
+
+  if (/unable to unlink|permission denied|invalid argument/i.test(details)) {
+    return [
+      'The shelf was created, but Git could not remove at least one selected file from the current branch.',
+      'This usually means a file is open or locked by another program. Close the program using the file, then verify or discard the remaining local changes after confirming the shelf exists.',
+    ].join(' ')
+  }
+
+  return [
+    'The shelf was created, but Git reported a problem while removing the selected changes from the current branch.',
+    'Some shelved files may still appear as local changes until you clean them up manually.',
+  ].join(' ')
 }
 
 export async function applyShelfToWorkingDirectory(

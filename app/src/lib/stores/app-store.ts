@@ -8172,7 +8172,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
     paths: ReadonlyArray<string>,
     shelfName: string,
     publish: boolean
-  ): Promise<void> {
+  ) {
     const { branchesState } = this.repositoryStateCache.get(repository)
     const { tip } = branchesState
 
@@ -8180,7 +8180,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
       throw new Error('Shelves can only be created while a branch is checked out.')
     }
 
-    const branchName = await createShelfBranchFromPaths(
+    const result = await createShelfBranchFromPaths(
       repository,
       tip.branch,
       paths,
@@ -8194,19 +8194,20 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
       if (remoteName !== null && remoteName !== undefined) {
         try {
-          await this._publishShelf(repository, branchName, remoteName)
+          await this._publishShelf(repository, result.branchName, remoteName)
         } catch (error) {
-          log.error(`Failed to publish shelf ${branchName}`, error)
+          log.error(`Failed to publish shelf ${result.branchName}`, error)
           this.emitError(
             error instanceof Error
               ? error
-              : new Error(`Failed to publish shelf ${branchName}.`)
+              : new Error(`Failed to publish shelf ${result.branchName}.`)
           )
         }
       }
     }
 
     await this._refreshRepository(repository)
+    return result
   }
 
   public async _publishShelf(
