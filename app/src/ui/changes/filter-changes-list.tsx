@@ -83,6 +83,7 @@ import { formatNumber } from '../../lib/format-number'
 import { IShelf, IShelfActionProgress } from '../../models/shelf'
 import { ShelvesSection } from '../shelves/shelves-section'
 import { getShelvesSectionState } from '../shelves/shelves-state'
+import { toSubmoduleRepositoryChange } from '../../lib/git'
 
 export interface IChangesListItem extends IFilterListItem {
   readonly id: string
@@ -700,14 +701,78 @@ export class FilterChangesList extends React.Component<
     }
   }
 
+  private getIgnoreFileMenuItems(
+    path: string,
+    onIgnoreFile: (pattern: string | string[]) => void,
+    onIgnorePattern: (pattern: string | string[]) => void
+  ): ReadonlyArray<IMenuItem> {
+    const items = new Array<IMenuItem>()
+    const enabled = Path.basename(path) !== GitIgnoreFileName
+
+    items.push({
+      label: __DARWIN__
+        ? 'Ignore File (Add to .gitignore)'
+        : 'Ignore file (add to .gitignore)',
+      action: () => onIgnoreFile(path),
+      enabled,
+    })
+
+    // Even on Windows, the path separator is '/' for git operations so cannot
+    // use Path.sep
+    const pathComponents = path.split('/').slice(0, -1)
+    if (pathComponents.length > 0) {
+      const submenu = pathComponents.map((_, index) => {
+        const label = `/${pathComponents
+          .slice(0, pathComponents.length - index)
+          .join('/')}`
+        return {
+          label,
+          action: () => onIgnoreFile(label),
+        }
+      })
+
+      items.push({
+        label: __DARWIN__
+          ? 'Ignore Folder (Add to .gitignore)'
+          : 'Ignore folder (add to .gitignore)',
+        submenu,
+        enabled,
+      })
+    }
+
+    const extension = Path.extname(path)
+    if (extension.length > 0) {
+      items.push({
+        label: __DARWIN__
+          ? `Ignore All ${extension} Files (Add to .gitignore)`
+          : `Ignore all ${extension} files (add to .gitignore)`,
+        action: () => onIgnorePattern(`*${extension}`),
+      })
+    }
+
+    return items
+  }
+
   private getSyntheticSubmoduleContextMenu(
     file: WorkingDirectoryFileChange
   ): ReadonlyArray<IMenuItem> {
     const enabled = file.status.kind !== AppFileStatusKind.Deleted
+    const submoduleChange = toSubmoduleRepositoryChange(file)
+    const submodulePath = submoduleChange.file.path
+    const onIgnoreFile = (pattern: string | string[]) =>
+      this.props.dispatcher.appendIgnoreFile(submoduleChange.repository, pattern)
+    const onIgnorePattern = (pattern: string | string[]) =>
+      this.props.dispatcher.appendIgnoreRule(submoduleChange.repository, pattern)
 
     return [
       this.getCopyPathMenuItem(file),
       this.getCopyRelativePathMenuItem(file),
+      { type: 'separator' },
+      ...this.getIgnoreFileMenuItems(
+        submodulePath,
+        onIgnoreFile,
+        onIgnorePattern
+      ),
       { type: 'separator' },
       this.getRevealInFileManagerMenuItem(file),
       this.getOpenInExternalEditorMenuItem(file, enabled),
