@@ -1,7 +1,9 @@
 import * as React from 'react'
 import { DialogContent } from '../dialog'
+import { Row } from '../lib/row'
 import { Select } from '../lib/select'
 import { Button } from '../lib/button'
+import { LinkButton } from '../lib/link-button'
 import { Octicon } from '../octicons'
 import * as octicons from '../octicons/octicons.generated'
 import { TabBar } from '../tab-bar'
@@ -17,8 +19,6 @@ import {
   isLocalBaseUrl,
   parseModelKey,
 } from '../../lib/copilot/byok'
-
-const DefaultSelectionValue = '__default__'
 
 interface ICopilotPreferencesProps {
   readonly selectedCopilotModels: CopilotModelSelections
@@ -55,10 +55,9 @@ export class CopilotPreferences extends React.Component<
   private onCommitMessageModelChanged = (
     event: React.FormEvent<HTMLSelectElement>
   ) => {
-    const value = event.currentTarget.value
     this.props.onSelectedCopilotModelChanged(
       'commit-message-generation',
-      value === DefaultSelectionValue ? null : value
+      event.currentTarget.value
     )
   }
 
@@ -117,9 +116,6 @@ export class CopilotPreferences extends React.Component<
     }
 
     const { copilotModels, byokProviders, selectedCopilotModels } = this.props
-    const rawSelection =
-      selectedCopilotModels['commit-message-generation'] ?? null
-    const value = this.resolveSelectionValue(rawSelection)
 
     if (copilotModels === null) {
       return <p>Loading available models…</p>
@@ -129,68 +125,136 @@ export class CopilotPreferences extends React.Component<
       return <p>No models available. Check your Copilot subscription.</p>
     }
 
+    const rawSelection =
+      selectedCopilotModels['commit-message-generation'] ?? null
+    const value = this.resolveSelectionValue(
+      copilotModels,
+      byokProviders,
+      rawSelection
+    )
+
+    if (value === null) {
+      // This should not happen at this point because if there are no models then
+      // we return early.
+      return <p>No models available. Check your Copilot subscription.</p>
+    }
+
     return (
-      <Select
-        label={
-          __DARWIN__ ? 'Commit Message Generation' : 'Commit message generation'
-        }
-        value={value}
-        onChange={this.onCommitMessageModelChanged}
-      >
-        <option value={DefaultSelectionValue}>Default</option>
-        {copilotModels.length > 0 && (
-          <optgroup label="GitHub Copilot">
-            {copilotModels.map(m => (
-              <option
-                key={m.id}
-                value={encodeModelKey({ kind: 'copilot', modelId: m.id })}
-              >
-                {m.id === DefaultCopilotModel ? `${m.name} (default)` : m.name}
-              </option>
-            ))}
-          </optgroup>
-        )}
-        {byokProviders.map(p => (
-          <optgroup key={p.id} label={p.name}>
-            {p.models.map(m => (
-              <option
-                key={m.id}
-                value={encodeModelKey({
-                  kind: 'byok',
-                  providerId: p.id,
-                  modelId: m.id,
-                })}
-              >
-                {m.name}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </Select>
+      <>
+        <Row className="copilot-feature-hint">
+          <p>
+            Tailor how Copilot behaves by using{' '}
+            <LinkButton uri="https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-custom-instructions">
+              custom instructions
+            </LinkButton>
+            .
+          </p>
+        </Row>
+        <Select
+          label={
+            __DARWIN__
+              ? 'Commit Message Generation'
+              : 'Commit message generation'
+          }
+          value={value}
+          onChange={this.onCommitMessageModelChanged}
+        >
+          {copilotModels.length > 0 && (
+            <optgroup label="GitHub Copilot">
+              {copilotModels.map(m => (
+                <option
+                  key={m.id}
+                  value={encodeModelKey({ kind: 'copilot', modelId: m.id })}
+                >
+                  {m.id === DefaultCopilotModel
+                    ? `${m.name} (default)`
+                    : m.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {byokProviders.map(p => (
+            <optgroup key={p.id} label={p.name}>
+              {p.models.map(m => (
+                <option
+                  key={m.id}
+                  value={encodeModelKey({
+                    kind: 'byok',
+                    providerId: p.id,
+                    modelId: m.id,
+                  })}
+                >
+                  {m.name}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </Select>
+        <p className="settings-description">
+          <LinkButton uri="https://docs.github.com/en/desktop/making-changes-in-a-branch/committing-and-reviewing-changes-to-your-project-in-github-desktop#write-a-commit-message-and-push-your-changes">
+            Learn more about generating commit messages.
+          </LinkButton>
+        </p>
+      </>
     )
   }
 
-  private resolveSelectionValue(raw: string | null): string {
-    if (raw === null) {
-      return DefaultSelectionValue
-    }
-    const key = parseModelKey(raw)
-    if (key.kind === 'byok') {
-      const provider = this.props.byokProviders.find(
-        p => p.id === key.providerId
-      )
-      if (provider && provider.models.some(m => m.id === key.modelId)) {
-        return encodeModelKey(key)
+  private resolveSelectionValue(
+    copilotModels: ReadonlyArray<ModelInfo>,
+    byokProviders: ReadonlyArray<IBYOKProvider>,
+    raw: string | null
+  ): string {
+    if (raw !== null) {
+      const key = parseModelKey(raw)
+      if (key.kind === 'byok') {
+        const provider = byokProviders.find(p => p.id === key.providerId)
+        if (provider && provider.models.some(m => m.id === key.modelId)) {
+          return encodeModelKey(key)
+        }
+      } else if (
+        key.modelId !== '' &&
+        copilotModels.some(m => m.id === key.modelId)
+      ) {
+        return encodeModelKey({ kind: 'copilot', modelId: key.modelId })
       }
-      return DefaultSelectionValue
     }
-    if (
-      key.modelId !== '' &&
-      this.props.copilotModels?.some(m => m.id === key.modelId)
-    ) {
-      return encodeModelKey({ kind: 'copilot', modelId: key.modelId })
+
+    return this.getFirstSelectableModelValue(copilotModels, byokProviders)
+  }
+
+  private getFirstSelectableModelValue(
+    copilotModels: ReadonlyArray<ModelInfo>,
+    byokProviders: ReadonlyArray<IBYOKProvider>
+  ): string {
+    if (copilotModels.length === 0 && byokProviders.length === 0) {
+      // This should not happen because we check for this case earlier, but let's
+      // make that assumption explicit and crash if it is violated rather than
+      // returning null.
+      throw new Error('No models available')
     }
-    return DefaultSelectionValue
+
+    const preferredCopilotModel = copilotModels.find(
+      m => m.id === DefaultCopilotModel
+    )
+    if (preferredCopilotModel !== undefined) {
+      return encodeModelKey({
+        kind: 'copilot',
+        modelId: preferredCopilotModel.id,
+      })
+    }
+
+    const firstCopilotModel = copilotModels[0]
+    if (firstCopilotModel !== undefined) {
+      return encodeModelKey({ kind: 'copilot', modelId: firstCopilotModel.id })
+    }
+
+    const firstProvider = byokProviders[0]
+    const firstByokModel = firstProvider.models[0]
+    return encodeModelKey({
+      kind: 'byok',
+      providerId: firstProvider.id,
+      modelId: firstByokModel.id,
+    })
   }
 
   private renderBYOKProviders() {

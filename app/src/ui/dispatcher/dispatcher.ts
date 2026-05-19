@@ -141,6 +141,10 @@ import { ICustomIntegration } from '../../lib/custom-integration'
 import { isAbsolute } from 'path'
 import { CLIAction } from '../../lib/cli-action'
 import { BypassReasonType } from '../secret-scanning/bypass-push-protection-dialog'
+import {
+  ICopilotConflictResolutionResponse,
+  IConflictResolutionProgress,
+} from '../../lib/copilot-conflict-resolution'
 
 /**
  * An error handler function.
@@ -1144,6 +1148,35 @@ export class Dispatcher {
     filesSelected: ReadonlyArray<WorkingDirectoryFileChange>
   ) {
     return this.appStore._generateCommitMessage(repository, filesSelected)
+  }
+
+  /**
+   * Use Copilot to analyze and suggest resolutions for conflicts
+   * from merge, rebase, or cherry-pick operations.
+   */
+  public resolveConflictsWithCopilot(
+    repository: Repository,
+    onProgress?: (progress: IConflictResolutionProgress) => void
+  ): Promise<ICopilotConflictResolutionResponse | null> {
+    return this.appStore._resolveConflictsWithCopilot(repository, onProgress)
+  }
+
+  /**
+   * Start the full Copilot conflict resolution flow: call the API and
+   * transition to the result dialog.
+   */
+  public startCopilotConflictResolution(repository: Repository): Promise<void> {
+    return this.appStore._startCopilotConflictResolution(repository)
+  }
+
+  /**
+   * Write Copilot-resolved file contents to disk and stage them.
+   * Called when the user confirms the resolutions from the result dialog.
+   */
+  public applyCopilotConflictResolutions(
+    repository: Repository
+  ): Promise<void> {
+    return this.appStore._applyCopilotConflictResolutions(repository)
   }
 
   /** Remove the given account from the app. */
@@ -3912,6 +3945,22 @@ export class Dispatcher {
     step: MultiCommitOperationStep
   ): Promise<void> {
     return this.appStore._setMultiCommitOperationStep(repository, step)
+  }
+
+  /**
+   * Atomically transition the multi commit operation step and set the
+   * useCopilotConflictResolution flag in a single store update.
+   */
+  public setMultiCommitOperationStepWithCopilotResolution(
+    repository: Repository,
+    step: MultiCommitOperationStep,
+    useCopilotConflictResolution: boolean
+  ): void {
+    this.appStore._setMultiCommitOperationStepWithCopilotResolution(
+      repository,
+      step,
+      useCopilotConflictResolution
+    )
   }
 
   /** Method to clear multi commit operation state. */
