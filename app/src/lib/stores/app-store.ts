@@ -228,6 +228,7 @@ import {
   getSubmoduleRepositoryWorkingDirectory,
   getSubmodulesToPush,
   getShelves,
+  getShelfFiles,
 } from '../git'
 import {
   installGlobalLFSFilters,
@@ -3383,6 +3384,146 @@ export class AppStore extends TypedBaseStore<IAppState> {
     this.updateMenuLabelsForSelectedRepository()
   }
 
+  public _hideShelfPreview(repository: Repository) {
+    const { changesState } = this.repositoryStateCache.get(repository)
+
+    if (changesState.selection.kind !== ChangesSelectionKind.Shelf) {
+      return
+    }
+
+    this.repositoryStateCache.updateChangesState(repository, state => {
+      const selectedFileIds = state.workingDirectory.files
+        .filter(f => f.selection.getSelectionType() !== DiffSelectionType.None)
+        .map(f => f.id)
+
+      return {
+        selection: {
+          kind: ChangesSelectionKind.WorkingDirectory,
+          diff: null,
+          selectedFileIDs: selectedFileIds,
+        },
+      }
+    })
+
+    this.emitUpdate()
+  }
+
+  public async _selectShelfFile(
+    repository: Repository,
+    shelf: IShelf,
+    file?: CommittedFileChange | null
+  ): Promise<void> {
+    this.repositoryStateCache.update(repository, () => ({
+      selectedSection: RepositorySectionTab.Changes,
+    }))
+
+    const existingSelection =
+      this.repositoryStateCache.get(repository).changesState.selection
+
+    if (
+      existingSelection.kind === ChangesSelectionKind.Shelf &&
+      existingSelection.shelf.id === shelf.id &&
+      !existingSelection.isLoadingFiles &&
+      file !== undefined
+    ) {
+      const selectedShelfFile =
+        file === null
+          ? null
+          : existingSelection.files.find(x => x.id === file.id) ?? null
+
+      this.repositoryStateCache.updateChangesState(repository, () => ({
+        selection: {
+          ...existingSelection,
+          selectedShelfFile,
+          selectedShelfFileDiff: null,
+        },
+      }))
+
+      this.emitUpdate()
+      this.updateChangesShelfDiff(repository)
+      return
+    }
+
+    this.repositoryStateCache.updateChangesState(repository, () => ({
+      selection: {
+        kind: ChangesSelectionKind.Shelf,
+        shelf,
+        files: [],
+        isLoadingFiles: true,
+        selectedShelfFile: null,
+        selectedShelfFileDiff: null,
+      },
+    }))
+    this.emitUpdate()
+
+    try {
+      const files = await getShelfFiles(repository, shelf.commitSha)
+      const stateAfterLoad = this.repositoryStateCache.get(repository)
+      const selectionAfterLoad = stateAfterLoad.changesState.selection
+
+      if (
+        selectionAfterLoad.kind !== ChangesSelectionKind.Shelf ||
+        selectionAfterLoad.shelf.id !== shelf.id
+      ) {
+        return
+      }
+
+      this.repositoryStateCache.updateChangesState(repository, state => {
+        let selectedShelfFile: CommittedFileChange | null = null
+        const { selection } = state
+
+        const currentlySelectedFile =
+          selection.kind === ChangesSelectionKind.Shelf &&
+          selection.shelf.id === shelf.id
+            ? selection.selectedShelfFile
+            : null
+
+        if (file === undefined) {
+          selectedShelfFile =
+            (currentlySelectedFile === null
+              ? null
+              : files.find(x => x.id === currentlySelectedFile.id) ?? null) ??
+            files[0] ??
+            null
+        } else if (file !== null) {
+          selectedShelfFile = files.find(x => x.id === file.id) ?? null
+        }
+
+        return {
+          selection: {
+            kind: ChangesSelectionKind.Shelf,
+            shelf,
+            files,
+            isLoadingFiles: false,
+            selectedShelfFile,
+            selectedShelfFileDiff: null,
+          },
+        }
+      })
+
+      this.emitUpdate()
+      this.updateChangesShelfDiff(repository)
+    } catch (error) {
+      this.repositoryStateCache.updateChangesState(repository, state => {
+        if (
+          state.selection.kind !== ChangesSelectionKind.Shelf ||
+          state.selection.shelf.id !== shelf.id
+        ) {
+          return { selection: state.selection }
+        }
+
+        return {
+          selection: {
+            ...state.selection,
+            isLoadingFiles: false,
+          },
+        }
+      })
+      this.emitUpdate()
+      this.emitError(new ErrorWithMetadata(error, { repository }))
+    }
+  }
+
   /**
    * Changes the selection in the changes view to the stash entry view and
    * optionally selects a particular file from the current stash entry.
@@ -3516,6 +3657,58 @@ export class AppStore extends TypedBaseStore<IAppState> {
         kind: ChangesSelectionKind.Stash,
         selectedStashedFile: file,
         selectedStashedFileDiff: diff,
+      },
+    }))
+    this.emitUpdate()
+  }
+
+  private async updateChangesShelfDiff(repository: Repository) {
+    const stateBeforeLoad = this.repositoryStateCache.get(repository)
+    const selectionBeforeLoad = stateBeforeLoad.changesState.selection
+
+    if (selectionBeforeLoad.kind !== ChangesSelectionKind.Shelf) {
+      return
+    }
+
+    let file = selectionBeforeLoad.selectedShelfFile
+
+    if (selectionBeforeLoad.isLoadingFiles) {
+      return
+    }
+
+    if (file === null && selectionBeforeLoad.files.length > 0) {
+      file = selectionBeforeLoad.files[0]
+    }
+
+    if (file === null) {
+      this.repositoryStateCache.updateChangesState(repository, () => ({
+        selection: {
+          ...selectionBeforeLoad,
+          selectedShelfFile: null,
+          selectedShelfFileDiff: null,
+        },
+      }))
+      this.emitUpdate()
+      return
+    }
+
+    const diff = await getCommitDiff(repository, file, file.commitish)
+    const stateAfterLoad = this.repositoryStateCache.get(repository)
+    const selectionAfterLoad = stateAfterLoad.changesState.selection
+
+    if (
+      selectionAfterLoad.kind !== ChangesSelectionKind.Shelf ||
+      selectionAfterLoad.shelf.id !== selectionBeforeLoad.shelf.id ||
+      selectionAfterLoad.selectedShelfFile !== selectionBeforeLoad.selectedShelfFile
+    ) {
+      return
+    }
+
+    this.repositoryStateCache.updateChangesState(repository, () => ({
+      selection: {
+        ...selectionAfterLoad,
+        selectedShelfFile: file,
+        selectedShelfFileDiff: diff,
       },
     }))
     this.emitUpdate()
@@ -8259,6 +8452,16 @@ export class AppStore extends TypedBaseStore<IAppState> {
   }
 
   public async _deleteShelf(repository: Repository, shelf: IShelf): Promise<void> {
+    const selection =
+      this.repositoryStateCache.get(repository).changesState.selection
+
+    if (
+      selection.kind === ChangesSelectionKind.Shelf &&
+      selection.shelf.id === shelf.id
+    ) {
+      this._hideShelfPreview(repository)
+    }
+
     if (shelf.localRef !== null) {
       await deleteLocalBranch(repository, shelf.branchName)
     }

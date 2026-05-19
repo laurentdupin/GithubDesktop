@@ -26,6 +26,7 @@ import { ImageDiffType } from '../models/diff'
 import { IMenu } from '../models/app-menu'
 import { StashDiffViewer } from './stashing'
 import { StashedChangesLoadStates } from '../models/stash-entry'
+import { ShelfPreviewViewer } from './shelves/shelf-preview-viewer'
 import { TutorialPanel, TutorialWelcome, TutorialDone } from './tutorial'
 import { TutorialStep, isValidTutorialStep } from '../models/tutorial-step'
 import { openFile } from './lib/open-file'
@@ -475,6 +476,34 @@ export class RepositoryView extends React.Component<
     return null
   }
 
+  private renderShelfPreviewContent(): JSX.Element | null {
+    const { selection } = this.props.state.changesState
+
+    if (selection.kind !== ChangesSelectionKind.Shelf) {
+      return null
+    }
+
+    return (
+      <ShelfPreviewViewer
+        shelf={selection.shelf}
+        files={selection.files}
+        isLoadingFiles={selection.isLoadingFiles}
+        selectedShelfFile={selection.selectedShelfFile}
+        shelfFileDiff={selection.selectedShelfFileDiff}
+        imageDiffType={this.props.imageDiffType}
+        fileListWidth={this.props.stashedFilesWidth}
+        repository={this.props.repository}
+        dispatcher={this.props.dispatcher}
+        showSideBySideDiff={this.props.showSideBySideDiff}
+        onOpenBinaryFile={this.onOpenBinaryFile}
+        onOpenSubmodule={this.onOpenSubmodule}
+        onChangeImageDiffType={this.onChangeImageDiffType}
+        onHideWhitespaceInDiffChanged={this.onHideWhitespaceInDiffChanged}
+        onOpenInExternalEditor={this.props.onOpenInExternalEditor}
+      />
+    )
+  }
+
   private onHideWhitespaceInDiffChanged = (hideWhitespaceInDiff: boolean) => {
     return this.props.dispatcher.onHideWhitespaceInChangesDiffChanged(
       hideWhitespaceInDiff,
@@ -565,6 +594,10 @@ export class RepositoryView extends React.Component<
 
     if (selection.kind === ChangesSelectionKind.Stash) {
       return this.renderStashedChangesContent()
+    }
+
+    if (selection.kind === ChangesSelectionKind.Shelf) {
+      return this.renderShelfPreviewContent()
     }
 
     const { selectedFileIDs, diff } = selection

@@ -102,7 +102,10 @@ export function updateChangedFiles(
         diff,
       },
     }
-  } else if (state.selection.kind === ChangesSelectionKind.Stash) {
+  } else if (
+    state.selection.kind === ChangesSelectionKind.Stash ||
+    state.selection.kind === ChangesSelectionKind.Shelf
+  ) {
     return {
       workingDirectory,
       selection: state.selection,

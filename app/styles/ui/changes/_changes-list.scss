@@ -242,6 +242,10 @@
   }
 
   .desktop-shelves-header {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -249,6 +253,32 @@
     color: var(--text-secondary-color);
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-semibold);
+    text-align: left;
+
+    &:hover {
+      color: var(--text-color);
+    }
+
+    &:focus {
+      outline: none;
+    }
+  }
+
+  &.desktop-shelves-section--collapsed {
+    .desktop-shelves-header {
+      margin-bottom: 0;
+    }
+  }
+
+  .desktop-shelves-heading {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: var(--spacing-half);
+
+    .octicon {
+      flex-shrink: 0;
+    }
   }
 
   .desktop-shelves-count {
@@ -269,6 +299,11 @@
     border: 1px solid var(--box-border-color);
     border-radius: var(--border-radius);
     background-color: var(--background-color);
+
+    &.desktop-shelf-row--selected {
+      border-color: var(--focus-color);
+      background-color: var(--box-selected-active-background-color);
+    }
   }
 
   .desktop-shelf-details {

@@ -1,6 +1,7 @@
 @import '../variables';
 
-#stash-diff-viewer {
+#stash-diff-viewer,
+#shelf-preview-viewer {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -48,6 +49,29 @@
         flex-shrink: 0;
       }
     }
+
+    .shelf-preview-title-row {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--spacing);
+    }
+
+    .shelf-preview-title {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .shelf-preview-meta {
+      color: var(--text-secondary-color);
+    }
+  }
+
+  .shelf-preview-loading {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary-color);
   }
 
   // Necessary so that the diff doesn't expand

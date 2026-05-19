@@ -5,6 +5,7 @@ import { GitError as DugiteError } from 'dugite'
 
 import { Branch, BranchType } from '../../models/branch'
 import { Repository } from '../../models/repository'
+import { CommittedFileChange } from '../../models/status'
 import {
   buildDesktopShelfBranchName,
   buildDesktopShelfCommitMessage,
@@ -13,7 +14,7 @@ import {
   parseDesktopShelfMetadata,
 } from '../../models/shelf'
 import { getBranches } from './for-each-ref'
-import { getCommit } from './log'
+import { getCommit, parseRawLogWithNumstat } from './log'
 import { git, GitError } from './core'
 
 interface IStashReference {
@@ -116,6 +117,30 @@ export async function getShelves(
 
     return a.name.localeCompare(b.name)
   })
+}
+
+export async function getShelfFiles(
+  repository: Repository,
+  commitSha: string
+): Promise<ReadonlyArray<CommittedFileChange>> {
+  const args = [
+    'log',
+    commitSha,
+    '-C',
+    '-M',
+    '-m',
+    '-1',
+    '--no-show-signature',
+    '--first-parent',
+    '--raw',
+    '--format=format:',
+    '--numstat',
+    '-z',
+    '--',
+  ]
+
+  const { stdout } = await git(args, repository.path, 'getShelfFiles')
+  return parseRawLogWithNumstat(stdout, commitSha, `${commitSha}^`).files
 }
 
 export async function createShelfBranchFromPaths(

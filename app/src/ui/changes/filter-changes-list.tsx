@@ -217,6 +217,7 @@ interface IFilterChangesListProps {
   readonly shelfActionInProgress: IShelfActionProgress | null
 
   readonly isShowingStashEntry: boolean
+  readonly selectedShelfId: string | null
 
   /**
    * Whether we should show the onboarding tutorial nudge
@@ -701,6 +702,28 @@ export class FilterChangesList extends React.Component<
     }
   }
 
+  private getAddSubmoduleRepositoryMenuItem = (
+    submoduleRepositoryPath: string,
+    enabled: boolean
+  ): IMenuItem => {
+    return {
+      label: __DARWIN__
+        ? 'Add Submodule as Repository'
+        : 'Add submodule as repository',
+      action: async () => {
+        const repositories = await this.props.dispatcher.addRepositories([
+          submoduleRepositoryPath,
+        ])
+        const repository = repositories[0]
+
+        if (repository !== undefined) {
+          await this.props.dispatcher.selectRepository(repository)
+        }
+      },
+      enabled,
+    }
+  }
+
   private getIgnoreFileMenuItems(
     path: string,
     onIgnoreFile: (pattern: string | string[]) => void,
@@ -775,6 +798,10 @@ export class FilterChangesList extends React.Component<
       ),
       { type: 'separator' },
       this.getRevealInFileManagerMenuItem(file),
+      this.getAddSubmoduleRepositoryMenuItem(
+        submoduleChange.repository.path,
+        enabled
+      ),
       this.getOpenInExternalEditorMenuItem(file, enabled),
       {
         label: OpenWithDefaultProgramLabel,
@@ -942,9 +969,18 @@ export class FilterChangesList extends React.Component<
     }
 
     const enabled = status.kind !== AppFileStatusKind.Deleted
+    const isSubmodule = status.submoduleStatus !== undefined
     items.push(
       { type: 'separator' },
       this.getRevealInFileManagerMenuItem(file),
+      ...(isSubmodule
+        ? [
+            this.getAddSubmoduleRepositoryMenuItem(
+              Path.join(this.props.repository.path, path),
+              enabled
+            ),
+          ]
+        : []),
       this.getOpenInExternalEditorMenuItem(file, enabled),
       {
         label: OpenWithDefaultProgramLabel,
@@ -977,12 +1013,21 @@ export class FilterChangesList extends React.Component<
     }
 
     const enabled = status.kind !== AppFileStatusKind.Deleted
+    const isSubmodule = status.submoduleStatus !== undefined
 
     items.push(
       this.getCopyPathMenuItem(file),
       this.getCopyRelativePathMenuItem(file),
       { type: 'separator' },
       this.getRevealInFileManagerMenuItem(file),
+      ...(isSubmodule
+        ? [
+            this.getAddSubmoduleRepositoryMenuItem(
+              Path.join(this.props.repository.path, path),
+              enabled
+            ),
+          ]
+        : []),
       this.getOpenInExternalEditorMenuItem(file, enabled),
       {
         label: OpenWithDefaultProgramLabel,
@@ -1305,6 +1350,7 @@ export class FilterChangesList extends React.Component<
         shelfActionInProgress={this.props.shelfActionInProgress}
         canUnshelve={canUnshelve}
         isBusy={isBusy}
+        selectedShelfId={this.props.selectedShelfId}
       />
     )
   }

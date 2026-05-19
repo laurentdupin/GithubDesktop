@@ -778,6 +778,7 @@ export interface ICommitSelection {
 export enum ChangesSelectionKind {
   WorkingDirectory = 'WorkingDirectory',
   Stash = 'Stash',
+  Shelf = 'Shelf',
 }
 
 export type ChangesWorkingDirectorySelection = {
@@ -801,9 +802,29 @@ export type ChangesStashSelection = {
   readonly selectedStashedFileDiff: IDiff | null
 }
 
+export type ChangesShelfSelection = {
+  readonly kind: ChangesSelectionKind.Shelf
+
+  /** The shelf currently being previewed. */
+  readonly shelf: IShelf
+
+  /** The files contained in the shelf commit. */
+  readonly files: ReadonlyArray<CommittedFileChange>
+
+  /** Whether the shelf file list is currently being loaded. */
+  readonly isLoadingFiles: boolean
+
+  /** Currently selected file in the shelf diff viewer UI. */
+  readonly selectedShelfFile: CommittedFileChange | null
+
+  /** Currently selected file's diff. */
+  readonly selectedShelfFileDiff: IDiff | null
+}
+
 export type ChangesSelection =
   | ChangesWorkingDirectorySelection
   | ChangesStashSelection
+  | ChangesShelfSelection
 
 export interface IChangesState {
   readonly workingDirectory: WorkingDirectoryStatus

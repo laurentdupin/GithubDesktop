@@ -5,6 +5,12 @@ import { Repository } from '../../models/repository'
 import { IShelf, IShelfActionProgress } from '../../models/shelf'
 import { Dispatcher } from '../dispatcher'
 import { Button } from '../lib/button'
+import { Octicon } from '../octicons'
+import * as octicons from '../octicons/octicons.generated'
+import { getBoolean, setBoolean } from '../../lib/local-storage'
+import { ShelfPreviewViewerId } from './shelf-preview-viewer'
+
+const shelvesCollapsedKey = 'shelves-section-collapsed'
 
 interface IShelvesSectionProps {
   readonly dispatcher: Dispatcher
@@ -13,9 +19,22 @@ interface IShelvesSectionProps {
   readonly shelfActionInProgress: IShelfActionProgress | null
   readonly canUnshelve: boolean
   readonly isBusy: boolean
+  readonly selectedShelfId: string | null
 }
 
-export class ShelvesSection extends React.Component<IShelvesSectionProps> {
+interface IShelvesSectionState {
+  readonly isCollapsed: boolean
+}
+
+export class ShelvesSection extends React.Component<
+  IShelvesSectionProps,
+  IShelvesSectionState
+> {
+  public constructor(props: IShelvesSectionProps) {
+    super(props)
+
+    this.state = { isCollapsed: getBoolean(shelvesCollapsedKey, false) }
+  }
 
   public render() {
     if (this.props.shelves.length === 0) {
@@ -29,19 +48,42 @@ export class ShelvesSection extends React.Component<IShelvesSectionProps> {
       <div
         className={classNames('desktop-shelves-section', {
           'desktop-shelves-section--busy': isSectionBusy,
+          'desktop-shelves-section--collapsed': this.state.isCollapsed,
         })}
         aria-busy={isSectionBusy}
       >
-        <div className="desktop-shelves-header">
-          <div className="desktop-shelves-title">Shelves</div>
+        <button
+          type="button"
+          className="desktop-shelves-header"
+          onClick={this.onToggleCollapsed}
+          aria-expanded={!this.state.isCollapsed}
+        >
+          <div className="desktop-shelves-heading">
+            <Octicon
+              symbol={
+                this.state.isCollapsed ? octicons.chevronRight : octicons.chevronDown
+              }
+            />
+            <span className="desktop-shelves-title">Shelves</span>
+          </div>
           <div className="desktop-shelves-count">{this.props.shelves.length}</div>
-        </div>
+        </button>
 
-        <div className="desktop-shelves-list">
-          {this.props.shelves.map(shelf => this.renderShelf(shelf))}
-        </div>
+        {this.state.isCollapsed ? null : (
+          <div className="desktop-shelves-list">
+            {this.props.shelves.map(shelf => this.renderShelf(shelf))}
+          </div>
+        )}
       </div>
     )
+  }
+
+  private onToggleCollapsed = () => {
+    this.setState(state => {
+      const isCollapsed = !state.isCollapsed
+      setBoolean(shelvesCollapsedKey, isCollapsed)
+      return { isCollapsed }
+    })
   }
 
   private renderShelf(shelf: IShelf) {
@@ -54,7 +96,12 @@ export class ShelvesSection extends React.Component<IShelvesSectionProps> {
         : `From ${shelf.sourceBranchName}`
 
     return (
-      <div className="desktop-shelf-row" key={shelf.id}>
+      <div
+        className={classNames('desktop-shelf-row', {
+          'desktop-shelf-row--selected': this.props.selectedShelfId === shelf.id,
+        })}
+        key={shelf.id}
+      >
         <div className="desktop-shelf-details">
           <div className="desktop-shelf-name">{shelf.name}</div>
           <div className="desktop-shelf-meta">
@@ -69,6 +116,19 @@ export class ShelvesSection extends React.Component<IShelvesSectionProps> {
             'desktop-shelf-actions--disabled': actionsDisabled,
           })}
         >
+          <Button
+            className="desktop-shelf-action"
+            size="small"
+            onClick={this.onViewClicked(shelf)}
+            ariaExpanded={this.props.selectedShelfId === shelf.id}
+            ariaControls={
+              this.props.selectedShelfId === shelf.id
+                ? ShelfPreviewViewerId
+                : undefined
+            }
+          >
+            View
+          </Button>
           <Button
             className="desktop-shelf-action"
             size="small"
@@ -104,6 +164,13 @@ export class ShelvesSection extends React.Component<IShelvesSectionProps> {
       </div>
     )
   }
+
+  private onViewClicked =
+    (shelf: IShelf) => async (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault()
+
+      await this.props.dispatcher.selectShelfFile(this.props.repository, shelf)
+    }
 
   private onUnshelveClicked =
     (shelf: IShelf) => async (event: React.MouseEvent<HTMLButtonElement>) => {

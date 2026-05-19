@@ -424,6 +424,8 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
         : []
 
     const isShowingStashEntry = selection.kind === ChangesSelectionKind.Stash
+    const selectedShelfId =
+      selection.kind === ChangesSelectionKind.Shelf ? selection.shelf.id : null
     const repositoryAccount = getAccountForRepository(
       this.props.accounts,
       this.props.repository
@@ -483,6 +485,7 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
           shelves={this.props.changes.shelves}
           shelfActionInProgress={this.props.changes.shelfActionInProgress}
           isShowingStashEntry={isShowingStashEntry}
+          selectedShelfId={selectedShelfId}
           currentBranchProtected={currentBranchProtected}
           shouldNudgeToCommit={this.props.shouldNudgeToCommit}
           commitSpellcheckEnabled={this.props.commitSpellcheckEnabled}

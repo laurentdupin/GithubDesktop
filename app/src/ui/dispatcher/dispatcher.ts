@@ -345,6 +345,14 @@ export class Dispatcher {
     return this.appStore._selectStashedFile(repository, file)
   }
 
+  public selectShelfFile(
+    repository: Repository,
+    shelf: IShelf,
+    file?: CommittedFileChange | null
+  ): Promise<void> {
+    return this.appStore._selectShelfFile(repository, shelf, file)
+  }
+
   /**
    * Commit the changes which were marked for inclusion, using the given commit
    * summary and description and optionally any number of commit message trailers
@@ -2838,6 +2846,11 @@ export class Dispatcher {
   /** Hide the diff for stashed changes */
   public hideStashedChanges(repository: Repository) {
     return this.appStore._hideStashedChanges(repository)
+  }
+
+  /** Hide the shelf preview */
+  public hideShelfPreview(repository: Repository) {
+    return this.appStore._hideShelfPreview(repository)
   }
 
   /** Call when the user opts to skip the pick editor step of the onboarding tutorial */
