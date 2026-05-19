@@ -202,16 +202,30 @@ export async function getStatus(
 export async function getStatus(
   repository: Repository,
   includeUntracked: boolean,
+  rejectOnError: true,
+  ignoreSubmoduleDirtyChanges: boolean
+): Promise<IStatusResult>
+export async function getStatus(
+  repository: Repository,
+  includeUntracked: boolean,
   rejectOnError: false
 ): Promise<IStatusResult | null>
 export async function getStatus(
   repository: Repository,
+  includeUntracked: boolean,
+  rejectOnError: false,
+  ignoreSubmoduleDirtyChanges: boolean
+): Promise<IStatusResult | null>
+export async function getStatus(
+  repository: Repository,
   includeUntracked = true,
-  rejectOnError = false
+  rejectOnError = false,
+  ignoreSubmoduleDirtyChanges = false
 ): Promise<IStatusResult | null> {
   const args = [
     '--no-optional-locks',
     'status',
+    ...(ignoreSubmoduleDirtyChanges ? ['--ignore-submodules=dirty'] : []),
     ...(includeUntracked ? ['--untracked-files=all'] : []),
     '--branch',
     '--porcelain=2',

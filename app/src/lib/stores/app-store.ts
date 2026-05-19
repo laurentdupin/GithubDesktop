@@ -198,11 +198,8 @@ import {
   IStatusResult,
   GitError,
   MergeResult,
-  getBranches,
-  getBranchesDifferingFromUpstream,
   deleteLocalBranch,
   deleteRemoteBranch,
-  fastForwardBranches,
   GitResetMode,
   reset,
   getBranchAheadBehind,
@@ -334,7 +331,10 @@ import { parseRemote } from '../../lib/remote-parsing'
 import { createTutorialRepository } from './helpers/create-tutorial-repository'
 import { sendNonFatalException } from '../helpers/non-fatal-exception'
 import { getDefaultDir } from '../../ui/lib/default-dir'
-import { WorkflowPreferences } from '../../models/workflow-preferences'
+import {
+  getTrackSubmoduleWorkingTreeChanges,
+  WorkflowPreferences,
+} from '../../models/workflow-preferences'
 import { RepositoryIndicatorUpdater } from './helpers/repository-indicator-updater'
 import { isAttributableEmailFor } from '../email'
 import { TrashNameLabel } from '../../ui/lib/context-menu'
@@ -564,6 +564,10 @@ const branchesEqual = (
     )
   })
 
+interface IRefreshRepositoryOptions {
+  readonly refreshBranches?: boolean
+}
+
 export class AppStore extends TypedBaseStore<IAppState> {
   private readonly gitStoreCache: GitStoreCache
 
@@ -672,6 +676,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
     number,
     Promise<ReadonlyArray<IForkSyncPreviewEntry>>
   >()
+  private readonly submoduleTrackingLogState = new Map<number, boolean>()
 
   /** The function to resolve the current Open in Desktop flow. */
   private resolveOpenInDesktop:
@@ -2865,17 +2870,23 @@ export class AppStore extends TypedBaseStore<IAppState> {
     clearPartialState: boolean = false
   ): Promise<IStatusResult | null> {
     const gitStore = this.gitStoreCache.get(repository)
-    const status = await gitStore.loadStatus()
+    const trackSubmoduleWorkingTreeChanges =
+      this.shouldTrackSubmoduleWorkingTreeChanges(repository)
+
+    const status = await gitStore.loadStatus(
+      !trackSubmoduleWorkingTreeChanges
+    )
 
     if (status === null) {
       return null
     }
 
-    const expandedWorkingDirectoryFiles =
-      await expandWorkingDirectoryWithSubmoduleChanges(
-        repository,
-        status.workingDirectory.files
-      )
+    const expandedWorkingDirectoryFiles = trackSubmoduleWorkingTreeChanges
+      ? await expandWorkingDirectoryWithSubmoduleChanges(
+          repository,
+          status.workingDirectory.files
+        )
+      : status.workingDirectory.files
 
     const expandedStatus: IStatusResult = {
       ...status,
@@ -2911,6 +2922,28 @@ export class AppStore extends TypedBaseStore<IAppState> {
     this.updateChangesWorkingDirectoryDiff(repository)
 
     return expandedStatus
+  }
+
+  private shouldTrackSubmoduleWorkingTreeChanges(
+    repository: Repository
+  ): boolean {
+    const trackSubmoduleWorkingTreeChanges =
+      getTrackSubmoduleWorkingTreeChanges(repository.workflowPreferences)
+    const previous = this.submoduleTrackingLogState.get(repository.id)
+
+    if (previous !== trackSubmoduleWorkingTreeChanges) {
+      this.submoduleTrackingLogState.set(
+        repository.id,
+        trackSubmoduleWorkingTreeChanges
+      )
+      log.info(
+        `[SubmoduleTracking] ${
+          trackSubmoduleWorkingTreeChanges ? 'Tracking' : 'Ignoring'
+        } submodule working tree changes for ${repository.path}`
+      )
+    }
+
+    return trackSubmoduleWorkingTreeChanges
   }
 
   /**
@@ -4106,7 +4139,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
   }
 
   /** This shouldn't be called directly. See `Dispatcher`. */
-  public async _refreshRepository(repository: Repository): Promise<void> {
+  public async _refreshRepository(
+    repository: Repository,
+    options: IRefreshRepositoryOptions = {}
+  ): Promise<void> {
     if (repository.missing) {
       return
     }
@@ -4133,9 +4169,13 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return
     }
 
-    // loadBranches needs the default remote to determine the default branch
+    // loadBranches needs the default remote to determine the default branch.
+    // Network-operation refreshes skip this full ref scan and refresh branch
+    // lists lazily when the branch UI is opened.
     await gitStore.loadRemotes()
-    await gitStore.loadBranches()
+    if (options.refreshBranches !== false) {
+      await gitStore.loadBranches()
+    }
 
     const section = state.selectedSection
     let refreshSectionPromise: Promise<void>
@@ -4243,7 +4283,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
     }
 
     const gitStore = this.gitStoreCache.get(repository)
-    const status = await gitStore.loadStatus()
+    const status = await gitStore.loadStatus(
+      !this.shouldTrackSubmoduleWorkingTreeChanges(repository)
+    )
     if (status === null) {
       lookup.delete(repository.id)
       return
@@ -4489,6 +4531,23 @@ export class AppStore extends TypedBaseStore<IAppState> {
     this.currentFoldout = foldout
     this.emitUpdate()
 
+    if (
+      foldout.type === FoldoutType.Branch &&
+      this.selectedRepository instanceof Repository
+    ) {
+      const repository = this.selectedRepository
+      const gitStore = this.gitStoreCache.get(repository)
+
+      if (!gitStore.hasFreshBranchList) {
+        void this.refreshBranchListForRepository(repository).catch(error =>
+          log.error(
+            `Failed refreshing branch list for ${repository.path}`,
+            error
+          )
+        )
+      }
+    }
+
     // If the user is opening the repository list and we haven't yet
     // started to refresh the repository indicators let's do so.
     if (
@@ -4499,6 +4558,18 @@ export class AppStore extends TypedBaseStore<IAppState> {
       // idempotent.
       this.repositoryIndicatorUpdater.start()
     }
+  }
+
+  private async refreshBranchListForRepository(
+    repository: Repository
+  ): Promise<void> {
+    if (repository.missing) {
+      return
+    }
+
+    const gitStore = this.gitStoreCache.get(repository)
+    await gitStore.loadRemotes()
+    await gitStore.loadBranches()
   }
 
   /** This shouldn't be called directly. See `Dispatcher`. */
@@ -5273,6 +5344,54 @@ export class AppStore extends TypedBaseStore<IAppState> {
     return true
   }
 
+  private async getChangedSubmodulePathsForPush(
+    repository: Repository,
+    branch: Branch
+  ): Promise<ReadonlySet<string> | undefined> {
+    if (branch.upstream === null) {
+      return undefined
+    }
+
+    const changedFiles = await getBranchMergeBaseChangedFiles(
+      repository,
+      branch.upstream,
+      branch.name,
+      branch.tip.sha
+    )
+
+    if (changedFiles === null) {
+      return undefined
+    }
+
+    const submodulePaths = new Set<string>()
+
+    for (const file of changedFiles.files) {
+      if (file.status.submoduleStatus !== undefined) {
+        submodulePaths.add(file.path)
+      }
+    }
+
+    return submodulePaths
+  }
+
+  private async getSubmodulesToPushForParentPush(
+    repository: Repository,
+    branch: Branch
+  ): Promise<ReadonlyArray<SubmodulePushContext>> {
+    const changedSubmodulePaths = await this.getChangedSubmodulePathsForPush(
+      repository,
+      branch
+    ).catch(error => {
+      log.warn(
+        `Unable to determine changed submodule paths before pushing ${repository.path}. Falling back to scanning all submodules.`,
+        error
+      )
+      return undefined
+    })
+
+    return getSubmodulesToPush(repository, changedSubmodulePaths)
+  }
+
   private async performPush(
     repository: Repository,
     options?: PushOptions
@@ -5309,7 +5428,18 @@ export class AppStore extends TypedBaseStore<IAppState> {
         branch: branch.name,
       })
 
-      const submodulesToPush = await getSubmodulesToPush(repository)
+      const trackSubmoduleWorkingTreeChanges =
+        this.shouldTrackSubmoduleWorkingTreeChanges(repository)
+
+      if (!trackSubmoduleWorkingTreeChanges) {
+        log.info(
+          `[SubmoduleTracking] Skipping submodule push checks for ${repository.path}`
+        )
+      }
+
+      const submodulesToPush = trackSubmoduleWorkingTreeChanges
+        ? await this.getSubmodulesToPushForParentPush(repository, branch)
+        : []
 
       // Let's say that a push takes roughly twice as long as a fetch,
       // this is of course highly inaccurate.
@@ -5432,11 +5562,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
           this.updatePushPullFetchProgress(repository, {
             kind: 'generic',
             title: refreshTitle,
-            description: 'Fast-forwarding branches',
+            description: 'Refreshing status',
             value: refreshStartProgress,
           })
-
-          await this.fastForwardBranches(repository)
 
           this.updatePushPullFetchProgress(repository, {
             kind: 'generic',
@@ -5448,7 +5576,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
           // any new branch will immediately report as protected
           await this.refreshBranchProtectionState(repository)
 
-          await this._refreshRepository(repository)
+          await this._refreshRepository(repository, { refreshBranches: false })
         },
         { retryAction }
       )
@@ -5587,11 +5715,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
             this.updatePushPullFetchProgress(repository, {
               kind: 'generic',
               title: refreshTitle,
-              description: 'Fast-forwarding branches',
+              description: 'Refreshing status',
               value: refreshStartProgress,
             })
-
-            await this.fastForwardBranches(repository)
 
             this.updatePushPullFetchProgress(repository, {
               kind: 'generic',
@@ -5600,7 +5726,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
             })
 
             await this.refreshBranchProtectionState(repository)
-            await this._refreshRepository(repository)
+            await this._refreshRepository(repository, { refreshBranches: false })
 
             pushed = true
             return true
@@ -5817,6 +5943,8 @@ export class AppStore extends TypedBaseStore<IAppState> {
           // either) or because there's a network error which likely will
           // persist for the next operation as well.
           if (pullSucceeded) {
+            gitStore.invalidateBranchList()
+
             // Updating the local HEAD symref isn't critical so we don't want
             // to show an error message to the user and have them retry the
             // entire pull operation if it fails.
@@ -5833,11 +5961,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
           this.updatePushPullFetchProgress(repository, {
             kind: 'generic',
             title: refreshTitle,
-            description: 'Fast-forwarding branches',
+            description: 'Refreshing status',
             value: refreshStartProgress,
           })
-
-          await this.fastForwardBranches(repository)
 
           this.updatePushPullFetchProgress(repository, {
             kind: 'generic',
@@ -5853,27 +5979,12 @@ export class AppStore extends TypedBaseStore<IAppState> {
           // any new branch will immediately report as protected
           await this.refreshBranchProtectionState(repository)
 
-          await this._refreshRepository(repository)
-          void this.refreshForkSyncPreviewCache(repository, true).catch(error =>
-            log.error('Failed refreshing fork sync cache after pull', error)
-          )
+          await this._refreshRepository(repository, { refreshBranches: false })
         } finally {
           this.updatePushPullFetchProgress(repository, null)
         }
       }
     })
-  }
-
-  private async fastForwardBranches(repository: Repository) {
-    try {
-      const eligibleBranches = await getBranchesDifferingFromUpstream(
-        repository
-      )
-
-      await fastForwardBranches(repository, eligibleBranches)
-    } catch (e) {
-      log.error('Branch fast-forwarding failed', e)
-    }
   }
 
   /** This shouldn't be called directly. See `Dispatcher`. */
@@ -6211,11 +6322,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
         this.updatePushPullFetchProgress(repository, {
           kind: 'generic',
           title: refreshTitle,
-          description: 'Fast-forwarding branches',
+          description: 'Refreshing status',
           value: fetchWeight,
         })
-
-        await this.fastForwardBranches(repository)
 
         this.updatePushPullFetchProgress(repository, {
           kind: 'generic',
@@ -6227,10 +6336,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
         // any new branch will immediately report as protected
         await this.refreshBranchProtectionState(repository)
 
-        await this._refreshRepository(repository)
-        void this.refreshForkSyncPreviewCache(repository, true).catch(error =>
-          log.error('Failed refreshing fork sync cache after fetch', error)
-        )
+        await this._refreshRepository(repository, { refreshBranches: false })
       } finally {
         this.updatePushPullFetchProgress(repository, null)
 
@@ -6307,7 +6413,11 @@ export class AppStore extends TypedBaseStore<IAppState> {
         let entries = new Array<IForkSyncPreviewEntry>()
 
         if (originRemote !== undefined && upstreamRemote !== null) {
-          const allBranches = await getBranches(repository)
+          if (!gitStore.hasFreshBranchList) {
+            await gitStore.loadBranches()
+          }
+
+          const allBranches = gitStore.allBranches
           entries = [
             ...(await this.computeForkSyncPreviewEntries(
               repository,
@@ -9087,7 +9197,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return
     }
 
-    const status = await gitStore.loadStatus()
+    const status = await gitStore.loadStatus(
+      !this.shouldTrackSubmoduleWorkingTreeChanges(repository)
+    )
     return status?.currentBranch
   }
 

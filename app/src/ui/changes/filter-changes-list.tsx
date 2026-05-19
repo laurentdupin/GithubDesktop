@@ -18,6 +18,9 @@ import {
   isRepositoryWithGitHubRepository,
   Repository,
 } from '../../models/repository'
+import {
+  getTrackSubmoduleWorkingTreeChanges,
+} from '../../models/workflow-preferences'
 import { Account } from '../../models/account'
 import { Author, UnknownAuthor } from '../../models/author'
 import { Checkbox, CheckboxValue } from '../lib/checkbox'
@@ -1502,7 +1505,44 @@ export class FilterChangesList extends React.Component<
           className="changes-list-check-all"
           label={checkAllLabel}
         />
+        <div className="spacer" />
+        {this.renderSubmoduleTrackingCheckbox()}
       </div>
+    )
+  }
+
+  private onSubmoduleTrackingChanged = (
+    event: React.FormEvent<HTMLInputElement>
+  ) => {
+    const trackSubmoduleWorkingTreeChanges = event.currentTarget.checked
+    const { repository } = this.props
+
+    void this.props.dispatcher.updateRepositoryWorkflowPreferences(repository, {
+      ...repository.workflowPreferences,
+      trackSubmoduleWorkingTreeChanges,
+    })
+  }
+
+  private renderSubmoduleTrackingCheckbox = () => {
+    const trackSubmoduleWorkingTreeChanges =
+      getTrackSubmoduleWorkingTreeChanges(
+        this.props.repository.workflowPreferences
+      )
+
+    return (
+      <Checkbox
+        value={
+          trackSubmoduleWorkingTreeChanges
+            ? CheckboxValue.On
+            : CheckboxValue.Off
+        }
+        onChange={this.onSubmoduleTrackingChanged}
+        disabled={
+          this.props.isCommitting || this.props.isPushPullFetchInProgress
+        }
+        className="submodule-tracking-toggle"
+        label="Track submodules"
+      />
     )
   }
 

@@ -162,7 +162,6 @@ export class RepositoriesList extends React.Component<
       <RepositoryListItem
         key={repository.id}
         repository={repository}
-        needsDisambiguation={item.needsDisambiguation}
         matches={matches}
         aheadBehind={item.aheadBehind}
         currentBranch={item.currentBranch}

@@ -239,12 +239,21 @@ export async function listSubmodules(
 }
 
 export async function getSubmodulesToPush(
-  repository: Repository
+  repository: Repository,
+  candidatePaths?: ReadonlySet<string>
 ): Promise<ReadonlyArray<SubmodulePushContext>> {
+  if (candidatePaths !== undefined && candidatePaths.size === 0) {
+    return []
+  }
+
   const submodules = await listSubmodules(repository)
   const pushableSubmodules = new Array<SubmodulePushContext>()
 
   for (const submodule of submodules) {
+    if (candidatePaths !== undefined && !candidatePaths.has(submodule.path)) {
+      continue
+    }
+
     const submoduleRepositoryPath = Path.join(repository.path, submodule.path)
 
     if (!(await pathExists(Path.join(submoduleRepositoryPath, '.git')))) {

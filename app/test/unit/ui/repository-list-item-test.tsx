@@ -46,7 +46,6 @@ describe('RepositoryListItem', () => {
     const view = render(
       <RepositoryListItem
         repository={repository}
-        needsDisambiguation={false}
         matches={noMatches}
         aheadBehind={{ ahead: 2, behind: 1 }}
         currentBranch={currentBranch}
@@ -76,7 +75,6 @@ describe('RepositoryListItem', () => {
     const view = render(
       <RepositoryListItem
         repository={repository}
-        needsDisambiguation={true}
         matches={noMatches}
         aheadBehind={null}
         currentBranch={currentBranch}
@@ -101,7 +99,6 @@ describe('RepositoryListItem', () => {
     const view = render(
       <RepositoryListItem
         repository={repository}
-        needsDisambiguation={true}
         matches={noMatches}
         aheadBehind={null}
         currentBranch={currentBranch}
@@ -141,7 +138,6 @@ describe('RepositoryListItem', () => {
     const view = render(
       <RepositoryListItem
         repository={repository}
-        needsDisambiguation={false}
         matches={noMatches}
         aheadBehind={null}
         currentBranch={currentBranch}
@@ -162,7 +158,6 @@ describe('RepositoryListItem', () => {
     render(
       <RepositoryListItem
         repository={repository}
-        needsDisambiguation={false}
         matches={noMatches}
         aheadBehind={null}
         currentBranch="main"

@@ -4095,7 +4095,7 @@ export class Dispatcher {
     )
   }
 
-  public async startForkSync(
+  public async startForkUpdate(
     repository: Repository,
     previewEntries: ReadonlyArray<IForkSyncPreviewEntry>
   ): Promise<void> {
@@ -4158,7 +4158,7 @@ export class Dispatcher {
 
     const updatedSubmodules = await this.updateForkSyncSubmodules(repository)
     if (!updatedSubmodules) {
-      return this.stopForkSync(
+      return this.stopForkUpdate(
         repository,
         currentEntry.branchName,
         'Updating submodules after resolving conflicts failed.'
@@ -4172,7 +4172,7 @@ export class Dispatcher {
       )
 
       if (!pushSucceeded) {
-        return this.stopForkSync(
+        return this.stopForkUpdate(
           repository,
           currentEntry.branchName,
           'Push to origin failed after resolving conflicts.'
@@ -4201,7 +4201,7 @@ export class Dispatcher {
     await this.abortMerge(repository)
 
     if (currentEntry !== undefined) {
-      await this.stopForkSync(
+      await this.stopForkUpdate(
         repository,
         currentEntry.branchName,
         'Fork sync was aborted while resolving conflicts.'
@@ -4244,7 +4244,7 @@ export class Dispatcher {
     const currentEntry = context.remainingEntries[0]
 
     if (currentEntry === undefined) {
-      return this.finalizeForkSync(repository, context)
+      return this.finalizeForkUpdate(repository, context)
     }
 
     await this.checkoutLocalBranch(repository, currentEntry.branchName)
@@ -4263,7 +4263,7 @@ export class Dispatcher {
     )
 
     if (localBranch === undefined || upstreamBranch === undefined) {
-      return this.stopForkSync(
+      return this.stopForkUpdate(
         repository,
         currentEntry.branchName,
         'A required branch disappeared while syncing.'
@@ -4280,7 +4280,7 @@ export class Dispatcher {
     )
 
     if (mergeResult === undefined) {
-      return this.stopForkSync(
+      return this.stopForkUpdate(
         repository,
         currentEntry.branchName,
         'Merge operation could not be started.'
@@ -4300,7 +4300,7 @@ export class Dispatcher {
         return
       }
 
-      return this.stopForkSync(
+      return this.stopForkUpdate(
         repository,
         currentEntry.branchName,
         'Merge from upstream failed.'
@@ -4310,7 +4310,7 @@ export class Dispatcher {
     if (mergeResult === MergeResult.Success) {
       const updatedSubmodules = await this.updateForkSyncSubmodules(repository)
       if (!updatedSubmodules) {
-        return this.stopForkSync(
+        return this.stopForkUpdate(
           repository,
           currentEntry.branchName,
           'Updating submodules after merge failed.'
@@ -4324,7 +4324,7 @@ export class Dispatcher {
         )
 
         if (!pushSucceeded) {
-          return this.stopForkSync(
+          return this.stopForkUpdate(
             repository,
             currentEntry.branchName,
             'Push to origin failed.'
@@ -4377,7 +4377,7 @@ export class Dispatcher {
     }
   }
 
-  private async stopForkSync(
+  private async stopForkUpdate(
     repository: Repository,
     branchName: string,
     reason: string
@@ -4398,7 +4398,7 @@ export class Dispatcher {
 
     this.updateForkSyncContext(repository, nextContext)
     await this.closePopup(PopupType.MultiCommitOperation)
-    await this.restoreOriginalBranchAfterForkSync(
+    await this.restoreOriginalBranchAfterForkUpdate(
       repository,
       nextContext.originalBranchName
     )
@@ -4410,12 +4410,12 @@ export class Dispatcher {
     })
   }
 
-  private async finalizeForkSync(
+  private async finalizeForkUpdate(
     repository: Repository,
     context: IForkSyncContext
   ): Promise<void> {
     await this.closePopup(PopupType.MultiCommitOperation)
-    await this.restoreOriginalBranchAfterForkSync(
+    await this.restoreOriginalBranchAfterForkUpdate(
       repository,
       context.originalBranchName
     )
@@ -4427,7 +4427,7 @@ export class Dispatcher {
     })
   }
 
-  private async restoreOriginalBranchAfterForkSync(
+  private async restoreOriginalBranchAfterForkUpdate(
     repository: Repository,
     branchName: string
   ): Promise<void> {

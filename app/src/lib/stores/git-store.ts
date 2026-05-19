@@ -119,6 +119,14 @@ export class GitStore extends BaseStore {
 
   private readonly requestsInFight = new Set<string>()
 
+  private branchListGeneration = 0
+
+  private loadedBranchListGeneration = -1
+
+  private branchLoad:
+    | { readonly generation: number; readonly promise: Promise<boolean> }
+    | null = null
+
   private _tip: Tip = { kind: TipState.Unknown }
 
   private _defaultBranch: Branch | null = null
@@ -327,6 +335,7 @@ export class GitStore extends BaseStore {
     })
 
     if (createdBranch === true) {
+      this.invalidateBranchList()
       await this.loadBranches()
       return this.allBranches.find(
         x => x.type === BranchType.Local && x.name === name
@@ -383,6 +392,45 @@ export class GitStore extends BaseStore {
 
   /** Load all the branches. */
   public async loadBranches() {
+    while (true) {
+      const generation = this.branchListGeneration
+
+      if (
+        this.branchLoad !== null &&
+        this.branchLoad.generation === generation
+      ) {
+        const loaded = await this.branchLoad.promise
+
+        if (loaded || this.branchListGeneration === generation) {
+          return
+        }
+
+        continue
+      }
+
+      if (this.branchLoad !== null) {
+        await this.branchLoad.promise
+        continue
+      }
+
+      const promise = this.loadBranchesForGeneration(generation)
+      this.branchLoad = { generation, promise }
+
+      try {
+        const loaded = await promise
+
+        if (loaded || this.branchListGeneration === generation) {
+          return
+        }
+      } finally {
+        if (this.branchLoad?.promise === promise) {
+          this.branchLoad = null
+        }
+      }
+    }
+  }
+
+  private async loadBranchesForGeneration(generation: number) {
     const [localAndRemoteBranches, recentBranchNames] = await Promise.all([
       this.performFailableOperation(() => getBranches(this.repository)) || [],
       this.performFailableOperation(() =>
@@ -394,10 +442,15 @@ export class GitStore extends BaseStore {
     ])
 
     if (!localAndRemoteBranches) {
-      return
+      return false
+    }
+
+    if (this.branchListGeneration !== generation) {
+      return false
     }
 
     this._allBranches = this.mergeRemoteAndLocalBranches(localAndRemoteBranches)
+    this.loadedBranchListGeneration = generation
 
     // refreshRecentBranches is dependent on having a default branch
     await this.refreshDefaultBranch()
@@ -406,6 +459,11 @@ export class GitStore extends BaseStore {
     await this.checkPullWithRebase()
 
     this.emitUpdate()
+    return true
+  }
+
+  public invalidateBranchList() {
+    this.branchListGeneration++
   }
 
   /**
@@ -585,6 +643,10 @@ export class GitStore extends BaseStore {
   /** All branches, including the current branch and the default branch. */
   public get allBranches(): ReadonlyArray<Branch> {
     return this._allBranches
+  }
+
+  public get hasFreshBranchList(): boolean {
+    return this.loadedBranchListGeneration === this.branchListGeneration
   }
 
   /** The most recently checked out branches. */
@@ -1098,6 +1160,8 @@ export class GitStore extends BaseStore {
     // either) or because there's a network error which likely will
     // persist for the next operation as well.
     if (fetchSucceeded) {
+      this.invalidateBranchList()
+
       // Updating the local HEAD symref isn't critical so we don't want
       // to show an error message to the user and have them retry the
       // entire pull operation if it fails.
@@ -1126,9 +1190,11 @@ export class GitStore extends BaseStore {
     }
   }
 
-  public async loadStatus(): Promise<IStatusResult | null> {
+  public async loadStatus(
+    ignoreSubmoduleDirtyChanges = false
+  ): Promise<IStatusResult | null> {
     const status = await this.performFailableOperation(() =>
-      getStatus(this.repository)
+      getStatus(this.repository, true, false, ignoreSubmoduleDirtyChanges)
     )
 
     if (!status) {
@@ -1151,6 +1217,7 @@ export class GitStore extends BaseStore {
           `refs/heads/${currentBranch}`
         )
         this._tip = { kind: TipState.Valid, branch }
+        this.updateCurrentBranchInBranchList(branch)
       } else if (currentTip) {
         this._tip = { kind: TipState.Detached, currentSha: currentTip }
       } else if (currentBranch) {
@@ -1163,6 +1230,34 @@ export class GitStore extends BaseStore {
     this.emitUpdate()
 
     return status
+  }
+
+  private updateCurrentBranchInBranchList(branch: Branch) {
+    const index = this._allBranches.findIndex(
+      b => b.type === BranchType.Local && b.name === branch.name
+    )
+
+    if (index === -1) {
+      if (this._allBranches.length > 0) {
+        this._allBranches = [branch, ...this._allBranches]
+      }
+      return
+    }
+
+    const existingBranch = this._allBranches[index]
+    if (
+      existingBranch.tip.sha === branch.tip.sha &&
+      existingBranch.upstream === branch.upstream &&
+      existingBranch.ref === branch.ref
+    ) {
+      return
+    }
+
+    this._allBranches = [
+      ...this._allBranches.slice(0, index),
+      branch,
+      ...this._allBranches.slice(index + 1),
+    ]
   }
 
   /**

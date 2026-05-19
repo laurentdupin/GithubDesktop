@@ -151,12 +151,7 @@ export class ShelvesSection extends React.Component<
             className="desktop-shelf-action desktop-shelf-delete-button"
             size="small"
             disabled={actionsDisabled}
-            onClick={() =>
-              this.props.dispatcher.showDeleteShelfDialog(
-                this.props.repository,
-                shelf
-              )
-            }
+            onClick={this.onDeleteClicked(shelf)}
           >
             Delete
           </Button>
@@ -196,6 +191,16 @@ export class ShelvesSection extends React.Component<
         shelf.branchName,
         shelf.remoteName ?? undefined,
         shelf.id
+      )
+    }
+
+  private onDeleteClicked =
+    (shelf: IShelf) => async (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault()
+
+      await this.props.dispatcher.showDeleteShelfDialog(
+        this.props.repository,
+        shelf
       )
     }
 }

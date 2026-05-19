@@ -97,7 +97,7 @@ export class ForkSyncPreviewDialog extends React.Component<
 
   private onSubmit = async () => {
     this.setState({ starting: true })
-    await this.props.dispatcher.startForkSync(
+    await this.props.dispatcher.startForkUpdate(
       this.props.repository,
       this.state.entries
     )

@@ -17,9 +17,6 @@ import { formatRepositoryDisplayName } from '../../lib/repository-display-name'
 interface IRepositoryListItemProps {
   readonly repository: Repositoryish
 
-  /** Does the repository need to be disambiguated in the list? */
-  readonly needsDisambiguation: boolean
-
   /** The characters in the repository name to highlight */
   readonly matches: IMatches
 
@@ -72,7 +69,6 @@ export class RepositoryListItem extends React.Component<
             aria-label={
               this.props.isPinned ? 'Unpin repository' : 'Pin repository'
             }
-            title={this.props.isPinned ? 'Unpin repository' : 'Pin repository'}
             onMouseDown={this.onPinButtonMouseDown}
             onClick={this.onPinButtonClick}
           >

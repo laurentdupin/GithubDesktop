@@ -150,6 +150,16 @@
         .spacer {
           flex-grow: 1;
         }
+
+        .submodule-tracking-toggle {
+          flex-shrink: 0;
+          margin-left: var(--spacing-half);
+
+          label {
+            @include ellipsis;
+            max-width: 140px;
+          }
+        }
       }
 
       .changes-list-check-all {
