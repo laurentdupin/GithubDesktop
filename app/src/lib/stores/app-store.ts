@@ -6463,6 +6463,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
           : [originRemote, upstreamRemote]
 
       await this.performFetch(repository, FetchType.UserInitiatedTask, remotes)
+      gitStore.invalidateBranchList()
       return this.refreshForkSyncPreviewCache(repository, true)
     })
   }
@@ -6576,6 +6577,32 @@ export class AppStore extends TypedBaseStore<IAppState> {
     const localBranchCount = branches.filter(
       branch => branch.type === BranchType.Local
     ).length
+    const defaultLocalBranch =
+      defaultBranchName !== null
+        ? branches.find(
+            branch =>
+              branch.type === BranchType.Local &&
+              branch.name === defaultBranchName
+          )
+        : undefined
+    const defaultOriginBranch =
+      defaultBranchName !== null
+        ? branches.find(
+            branch =>
+              branch.type === BranchType.Remote &&
+              branch.remoteName === originRemoteName &&
+              branch.nameWithoutRemote === defaultBranchName
+          )
+        : undefined
+    const defaultUpstreamBranch =
+      defaultBranchName !== null
+        ? branches.find(
+            branch =>
+              branch.type === BranchType.Remote &&
+              branch.remoteName === upstreamRemoteName &&
+              branch.nameWithoutRemote === defaultBranchName
+          )
+        : undefined
     const defaultBranchEntry =
       defaultBranchName !== null
         ? entries.find(entry => entry.branchName === defaultBranchName)
@@ -6601,7 +6628,13 @@ export class AppStore extends TypedBaseStore<IAppState> {
         branches.length - localBranchCount
       }, needsSync=${needsSyncCount}, conflicts=${conflictsCount}, upToDate=${upToDateCount}, skippedNoLocal=${skippedNoLocalCount}, skippedDivergedOrigin=${skippedDivergedOriginCount}, defaultBranch=${
         defaultBranchName ?? 'none'
-      }, defaultBranchStatus=${defaultBranchEntry?.status ?? 'missing'}`
+      }, defaultBranchStatus=${
+        defaultBranchEntry?.status ?? 'missing'
+      }, defaultBranchRefs=local:${
+        defaultLocalBranch?.tip.sha ?? 'missing'
+      } origin:${defaultOriginBranch?.tip.sha ?? 'missing'} upstream:${
+        defaultUpstreamBranch?.tip.sha ?? 'missing'
+      }`
     )
 
     return entries
