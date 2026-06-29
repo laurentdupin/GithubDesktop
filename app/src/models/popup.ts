@@ -29,6 +29,7 @@ import { TerminalOutput, TerminalOutputListener } from '../lib/git'
 import { IForkSyncSummary } from './fork-sync'
 import { IShelf } from './shelf'
 import type { IBYOKModel, IBYOKProvider } from '../lib/copilot/byok'
+import { WorktreeEntry } from './worktree'
 
 export enum PopupType {
   RenameBranch = 'RenameBranch',
@@ -104,19 +105,26 @@ export enum PopupType {
   TestIcons = 'TestIcons',
   ConfirmCommitFilteredChanges = 'ConfirmCommitFilteredChanges',
   TestAbout = 'TestAbout',
+  TestCLIAction = 'TestCLIAction',
   PushProtectionError = 'PushProtectionError',
   BypassPushProtection = 'BypassPushProtection',
   GenerateCommitMessageOverrideWarning = 'GenerateCommitMessageOverrideWarning',
   GenerateCommitMessageDisclaimer = 'GenerateCommitMessageDisclaimer',
+  CopilotConflictResolutionDisclaimer = 'CopilotConflictResolutionDisclaimer',
   HookFailed = 'HookFailed',
   CommitProgress = 'CommitProgress',
   ForkSyncPreview = 'ForkSyncPreview',
   ForkSyncSummary = 'ForkSyncSummary',
   CreateShelf = 'CreateShelf',
   DeleteShelf = 'DeleteShelf',
+  AddWorktree = 'AddWorktree',
+  RenameWorktree = 'RenameWorktree',
+  DeleteWorktree = 'DeleteWorktree',
   EditCopilotBYOKProvider = 'EditCopilotBYOKProvider',
   EditCopilotBYOKModel = 'EditCopilotBYOKModel',
   ConfirmDeleteCopilotBYOKProvider = 'ConfirmDeleteCopilotBYOKProvider',
+  CopilotConflictResolutionAlwaysNudge = 'CopilotConflictResolutionAlwaysNudge',
+  DeleteWorktreeFailed = 'DeleteWorktreeFailed',
 }
 
 interface IBasePopup {
@@ -479,6 +487,9 @@ export type PopupDetail =
       type: PopupType.TestAbout
     }
   | {
+      type: PopupType.TestCLIAction
+    }
+  | {
       type: PopupType.PushProtectionError
       secrets: ReadonlyArray<ISecretScanResult>
     }
@@ -504,6 +515,14 @@ export type PopupDetail =
       filesSelected: ReadonlyArray<WorkingDirectoryFileChange>
     }
   | {
+      type: PopupType.CopilotConflictResolutionDisclaimer
+      repository: Repository
+    }
+  | {
+      type: PopupType.CopilotConflictResolutionAlwaysNudge
+      repository: Repository
+    }
+  | {
       type: PopupType.HookFailed
       hookName: string
       terminalOutput: TerminalOutput
@@ -522,5 +541,27 @@ export type PopupDetail =
       repository: Repository
       summary: IForkSyncSummary
     }
-
+  | {
+      type: PopupType.AddWorktree
+      repository: Repository
+      initialBranchName?: string
+      initialWorktreeName?: string
+    }
+  | {
+      type: PopupType.RenameWorktree
+      repository: Repository
+      worktreePath: string
+    }
+  | {
+      type: PopupType.DeleteWorktree
+      repository: Repository
+      worktreePath: string
+    }
+  | {
+      type: PopupType.DeleteWorktreeFailed
+      repository: Repository
+      worktreePath: string
+      error: Error
+      originalWorktree: WorktreeEntry | null
+    }
 export type Popup = IBasePopup & PopupDetail

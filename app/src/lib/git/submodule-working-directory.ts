@@ -8,7 +8,7 @@ import {
   WorkingDirectoryFileChange,
   isSyntheticSubmoduleChange,
 } from '../../models/status'
-import { pathExists } from '../../ui/lib/path-exists'
+import { pathExists } from '../path-exists'
 import { getStatus } from './status'
 
 function buildSyntheticSubmoduleStatus(
