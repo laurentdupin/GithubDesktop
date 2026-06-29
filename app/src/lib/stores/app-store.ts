@@ -370,7 +370,6 @@ import {
 import {
   getForkSyncCandidateBranches,
   IForkSyncContext,
-  IForkSyncPreviewCache,
   IForkSyncPreviewEntry,
   summarizeForkSyncPreviewEntries,
 } from '../../models/fork-sync'
@@ -6349,22 +6348,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
     })
   }
 
-  private isForkSyncPreviewFresh(
-    repository: Repository,
-    preview: IForkSyncPreviewCache | null
-  ): preview is IForkSyncPreviewCache {
-    if (preview === null || preview.isLoading || !preview.isBasedOnFetch) {
-      return false
-    }
-
-    const { lastFetched } = this.repositoryStateCache.get(repository)
-    return (
-      lastFetched !== null &&
-      preview.lastFetched !== null &&
-      lastFetched.getTime() === preview.lastFetched.getTime()
-    )
-  }
-
   private async refreshForkSyncPreviewCache(
     repository: Repository,
     isBasedOnFetch: boolean
@@ -6454,11 +6437,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
     repository: Repository
   ): Promise<ReadonlyArray<IForkSyncPreviewEntry>> {
     return this.withRefreshedGitHubRepository(repository, async repository => {
-      const cachedPreview = this.repositoryStateCache.get(repository).forkSyncPreview
-      if (this.isForkSyncPreviewFresh(repository, cachedPreview)) {
-        return cachedPreview.entries
-      }
-
       const inFlightPreview = this.forkSyncPreviewRefreshers.get(repository.id)
       if (inFlightPreview !== undefined) {
         return inFlightPreview
@@ -6485,12 +6463,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
           : [originRemote, upstreamRemote]
 
       await this.performFetch(repository, FetchType.UserInitiatedTask, remotes)
-      const refreshedPreview = this.repositoryStateCache.get(repository)
-        .forkSyncPreview
-      if (this.isForkSyncPreviewFresh(repository, refreshedPreview)) {
-        return refreshedPreview.entries
-      }
-
       return this.refreshForkSyncPreviewCache(repository, true)
     })
   }
