@@ -198,6 +198,7 @@ import {
   IStatusResult,
   GitError,
   MergeResult,
+  getBranches,
   deleteLocalBranch,
   deleteRemoteBranch,
   GitResetMode,
@@ -6396,11 +6397,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
         let entries = new Array<IForkSyncPreviewEntry>()
 
         if (originRemote !== undefined && upstreamRemote !== null) {
-          if (!gitStore.hasFreshBranchList) {
-            await gitStore.loadBranches()
-          }
-
-          const allBranches = gitStore.allBranches
+          // Fork sync needs the raw remote refs. gitStore.allBranches is
+          // normalized for the branch UI and hides remote refs tracked by a
+          // local branch, e.g. origin/development.
+          const allBranches = await getBranches(repository)
           entries = [
             ...(await this.computeForkSyncPreviewEntries(
               repository,
