@@ -2956,13 +2956,11 @@ export class Dispatcher {
           )
         }
 
+        log.info(
+          `[shelf] Unshelving ${shelf.branchName} into ${repository.path}`
+        )
         const result = await applyShelfToWorkingDirectory(repository, shelf)
-
-        if (result === 'applied') {
-          await this.deleteShelf(repository, shelf)
-          return
-        }
-
+        log.info(`[shelf] Unshelve ${shelf.branchName} finished: ${result}`)
         await this.refreshRepository(repository)
       }
     )
@@ -2977,6 +2975,9 @@ export class Dispatcher {
 
     try {
       return await fn()
+    } catch (error) {
+      log.error(`[shelf] ${action.kind} action failed for ${action.shelfId}`, error)
+      throw error
     } finally {
       this.appStore._setShelfActionInProgress(repository, null)
     }
