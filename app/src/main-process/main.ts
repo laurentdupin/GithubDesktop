@@ -239,6 +239,20 @@ async function handleCommandLineArguments(argv: string[]) {
   const args = parseCommandLineArgs(argv, {
     boolean: ['protocol-launcher'],
   })
+  const prefixes = Array.from(possibleProtocols, p => `${p}://`)
+  const matchingUrl = argv.find(arg => {
+    if (!prefixes.some(p => arg.startsWith(p))) {
+      return false
+    }
+
+    try {
+      new URL(arg)
+      return true
+    } catch (e) {
+      log.error(`Unable to parse argument as URL: ${arg}`)
+      return false
+    }
+  })
 
   // Desktop registers it's protocol handler callback on Windows as
   // `[executable path] --protocol-launcher "%1"`. Note that extra command
@@ -256,19 +270,6 @@ async function handleCommandLineArguments(argv: string[]) {
     // sure that Chromium won't add more switches later on which is why we have
     // to resort to looking through all arguments looking for something that
     // appears to be an app url.
-    const prefixes = Array.from(possibleProtocols, p => `${p}://`)
-    const matchingUrl = argv.find(arg => {
-      if (prefixes.some(p => arg.startsWith(p))) {
-        try {
-          new URL(arg)
-          return true
-        } catch (e) {
-          log.error(`Unable to parse argument as URL: ${arg}`)
-        }
-      }
-      return false
-    })
-
     if (matchingUrl) {
       handleAppURL(matchingUrl)
     } else {
@@ -279,7 +280,13 @@ async function handleCommandLineArguments(argv: string[]) {
     return
   }
 
-  if (typeof args['cli-open'] === 'string') {
+  // Linux desktop launchers pass custom-scheme URLs as ordinary positional
+  // arguments. Electron doesn't emit macOS's open-url event there, so consume
+  // the validated callback directly for both cold launches and second
+  // instances.
+  if (__LINUX__ && matchingUrl) {
+    handleAppURL(matchingUrl)
+  } else if (typeof args['cli-open'] === 'string') {
     handleCLIAction({ kind: 'open-repository', path: args['cli-open'] })
   } else if (typeof args['cli-clone'] === 'string') {
     handleCLIAction({
