@@ -89,15 +89,24 @@ if (shellNeedsPatching(process)) {
 
 enableSourceMaps()
 
-// Tell dugite where to find the git environment,
-// see https://github.com/desktop/dugite/pull/85
-process.env['LOCAL_GIT_DIRECTORY'] = Path.resolve(__dirname, 'git')
+if (__LINUX__) {
+  // The bundled Linux Git is built against libcurl-gnutls, which isn't
+  // available on Arch-derived distributions. Use the system Git environment
+  // so HTTPS operations load the system's compatible libcurl instead.
+  process.env.LOCAL_GIT_DIRECTORY = '/usr'
+  process.env.GIT_EXEC_PATH = '/usr/lib/git-core'
+  process.env.GIT_CONFIG_SYSTEM = '/etc/gitconfig'
+} else {
+  // Tell dugite where to find the bundled git environment,
+  // see https://github.com/desktop/dugite/pull/85
+  process.env.LOCAL_GIT_DIRECTORY = Path.resolve(__dirname, 'git')
 
-// Ensure that dugite infers the GIT_EXEC_PATH
-// based on the LOCAL_GIT_DIRECTORY env variable
-// instead of just blindly trusting what's set in
-// the current environment. See https://git.io/JJ7KF
-delete process.env.GIT_EXEC_PATH
+  // Ensure that dugite infers the GIT_EXEC_PATH
+  // based on the LOCAL_GIT_DIRECTORY env variable
+  // instead of just blindly trusting what's set in
+  // the current environment. See https://git.io/JJ7KF
+  delete process.env.GIT_EXEC_PATH
+}
 
 const startTime = performance.now()
 
