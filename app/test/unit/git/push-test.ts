@@ -116,6 +116,31 @@ describe('git/push', () => {
     assert.ok(result.stdout.includes('rewritten commit'))
   })
 
+  it('publishes a detached commit as a tag', async t => {
+    const repo = await setupEmptyRepository(t)
+    await makeCommit(repo, {
+      entries: [{ path: 'README.md', contents: 'initial' }],
+      commitMessage: 'initial commit',
+    })
+
+    const barePath = await createBareUpstream(t, repo)
+    await exec(['remote', 'add', 'origin', barePath], repo.path)
+    await makeCommit(repo, {
+      entries: [{ path: 'detached.txt', contents: 'detached content' }],
+      commitMessage: 'detached commit',
+    })
+
+    const head = (await exec(['rev-parse', 'HEAD'], repo.path)).stdout.trim()
+    await exec(['checkout', '--detach', head], repo.path)
+
+    const remote: IRemote = { name: 'origin', url: barePath }
+    const tagRef = `refs/tags/desktop-submodule/${head}`
+    await push(repo, remote, 'HEAD', tagRef, null, { checkSubmodules: true })
+
+    const result = await exec(['rev-parse', tagRef], barePath)
+    assert.equal(result.stdout.trim(), head)
+  })
+
   it('reports progress when callback is provided', async t => {
     const repo = await setupEmptyRepository(t)
     await makeCommit(repo, {

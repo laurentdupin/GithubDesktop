@@ -5566,6 +5566,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
         null,
         {
           noVerify: options?.noVerify,
+          checkSubmodules: true,
           onHookFailure: this.onHookFailure(() => (aborted = true)),
         },
         progress => {
@@ -5779,6 +5780,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
             {
               onHookFailure: this.onHookFailure(() => (aborted = true)),
               ...options,
+              checkSubmodules: true,
             },
             progress => {
               this.updatePushPullFetchProgress(repository, {

@@ -19,6 +19,9 @@ export type PushOptions = {
   readonly branch?: Branch
 
   readonly noVerify?: boolean
+
+  /** Fail rather than publish a commit that references an unavailable submodule. */
+  readonly checkSubmodules?: boolean
 } & HookCallbackOptions
 
 /**
@@ -71,6 +74,10 @@ export async function push(
 
   if (options?.noVerify) {
     args.push('--no-verify')
+  }
+
+  if (options?.checkSubmodules) {
+    args.push('--recurse-submodules=check')
   }
 
   let opts: IGitStringExecutionOptions = {

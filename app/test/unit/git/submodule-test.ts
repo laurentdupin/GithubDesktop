@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 import * as path from 'path'
-import { readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, writeFile } from 'fs/promises'
 import { exec } from 'dugite'
 
 import { Repository } from '../../../src/models/repository'
@@ -12,6 +12,7 @@ import {
 } from '../../../src/lib/git/submodule'
 import { checkoutBranch, getBranches, getStatus } from '../../../src/lib/git'
 import { setupFixtureRepository } from '../../helpers/repositories'
+import { createTempDirectory } from '../../helpers/temp'
 
 describe('git/submodule', () => {
   describe('listSubmodules', () => {
@@ -146,6 +147,97 @@ describe('git/submodule', () => {
       assert.equal(
         result[0].remoteBranchName,
         submoduleStatus.currentBranch
+      )
+    })
+
+    it('publishes an unavailable detached commit as a tag', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+
+      await writeFile(path.join(submodulePath, 'README.md'), 'detached change')
+      await exec(['commit', '-am', 'detached submodule commit'], submodulePath)
+      const head = (await exec(['rev-parse', 'HEAD'], submodulePath)).stdout.trim()
+      await exec(['checkout', '--detach', head], submodulePath)
+
+      const result = await getSubmodulesToPush(repository)
+      assert.equal(result.length, 1)
+      assert.equal(result[0].path, 'foo/submodule')
+      assert.equal(result[0].branchName, 'HEAD')
+      assert.equal(
+        result[0].remoteBranchName,
+        `refs/tags/desktop-submodule/${head}`
+      )
+    })
+
+    it('skips a detached commit already available from its remote', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+      const head = (await exec(['rev-parse', 'HEAD'], submodulePath)).stdout.trim()
+
+      await exec(['checkout', '--detach', head], submodulePath)
+
+      const result = await getSubmodulesToPush(repository)
+      assert.equal(result.length, 0)
+    })
+
+    it('returns nested submodules before their parents', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+      const nestedRemotePath = await createTempDirectory(t)
+      const nestedSeedPath = await createTempDirectory(t)
+
+      await exec(['init', '--bare'], nestedRemotePath)
+      await exec(['init'], nestedSeedPath)
+      await exec(['config', 'user.name', 'GitHub Desktop Test'], nestedSeedPath)
+      await exec(
+        ['config', 'user.email', 'test@githubdesktop.invalid'],
+        nestedSeedPath
+      )
+      await writeFile(path.join(nestedSeedPath, 'README.md'), 'nested')
+      await exec(['add', 'README.md'], nestedSeedPath)
+      await exec(['commit', '-m', 'initial nested commit'], nestedSeedPath)
+      await exec(['remote', 'add', 'origin', nestedRemotePath], nestedSeedPath)
+      await exec(['push', '-u', 'origin', 'HEAD'], nestedSeedPath)
+
+      await exec(
+        [
+          '-c',
+          'protocol.file.allow=always',
+          'submodule',
+          'add',
+          nestedRemotePath,
+          'nested',
+        ],
+        submodulePath
+      )
+      await exec(['commit', '-am', 'add nested submodule'], submodulePath)
+
+      const nestedPath = path.join(submodulePath, 'nested')
+      await mkdir(path.join(nestedPath, 'new-directory'))
+      await writeFile(
+        path.join(nestedPath, 'new-directory', 'change.txt'),
+        'changed'
+      )
+      await exec(['add', '.'], nestedPath)
+      await exec(['commit', '-m', 'update nested submodule'], nestedPath)
+      await exec(['commit', '-am', 'update nested submodule pointer'], submodulePath)
+
+      const result = await getSubmodulesToPush(repository)
+      assert.deepEqual(
+        result.map(x => x.path),
+        ['foo/submodule/nested', 'foo/submodule']
       )
     })
   })

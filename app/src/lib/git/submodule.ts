@@ -70,6 +70,27 @@ async function shouldPushSubmodule(
   return aheadBehind === null || aheadBehind.ahead > 0
 }
 
+async function isCommitAvailableOnRemote(
+  repository: Repository,
+  remote: IRemote,
+  commitSha: string
+) {
+  const { stdout } = await git(
+    [
+      'for-each-ref',
+      '--contains',
+      commitSha,
+      '--format=%(refname)',
+      `refs/remotes/${remote.name}/`,
+      'refs/tags/',
+    ],
+    repository.path,
+    'isSubmoduleCommitAvailableOnRemote'
+  )
+
+  return stdout.trim().length > 0
+}
+
 /**
  * Update submodules after a git operation.
  *
@@ -261,8 +282,35 @@ export async function getSubmodulesToPush(
     return []
   }
 
-  const submodules = await listSubmodules(repository)
   const pushableSubmodules = new Array<SubmodulePushContext>()
+  const visitedRepositoryPaths = new Set<string>([
+    normalizeSubmoduleRepositoryPath(repository.path),
+  ])
+
+  await collectSubmodulesToPush(
+    repository,
+    '',
+    candidatePaths,
+    visitedRepositoryPaths,
+    pushableSubmodules
+  )
+
+  return pushableSubmodules
+}
+
+function normalizeSubmoduleRepositoryPath(path: string) {
+  const normalizedPath = resolve(path)
+  return __WIN32__ ? normalizedPath.toLowerCase() : normalizedPath
+}
+
+async function collectSubmodulesToPush(
+  repository: Repository,
+  parentPath: string,
+  candidatePaths: ReadonlySet<string> | undefined,
+  visitedRepositoryPaths: Set<string>,
+  pushableSubmodules: Array<SubmodulePushContext>
+): Promise<void> {
+  const submodules = await listSubmodules(repository)
 
   for (const submodule of submodules) {
     if (candidatePaths !== undefined && !candidatePaths.has(submodule.path)) {
@@ -270,15 +318,36 @@ export async function getSubmodulesToPush(
     }
 
     const submoduleRepositoryPath = join(repository.path, submodule.path)
-
     if (!(await pathExists(join(submoduleRepositoryPath, '.git')))) {
       continue
     }
 
-    const submoduleRepository = createSubmoduleRepository(submoduleRepositoryPath)
-    const status = await getStatus(submoduleRepository)
+    const normalizedPath = normalizeSubmoduleRepositoryPath(
+      submoduleRepositoryPath
+    )
+    if (visitedRepositoryPaths.has(normalizedPath)) {
+      continue
+    }
 
-    if (status === null || status.currentBranch === undefined) {
+    visitedRepositoryPaths.add(normalizedPath)
+
+    const submoduleRepository = createSubmoduleRepository(submoduleRepositoryPath)
+    const displayPath = parentPath
+      ? `${parentPath}/${submodule.path}`
+      : submodule.path
+
+    // Push descendants first so every commit referenced by a parent submodule
+    // is available remotely before that parent's branch is pushed.
+    await collectSubmodulesToPush(
+      submoduleRepository,
+      displayPath,
+      undefined,
+      visitedRepositoryPaths,
+      pushableSubmodules
+    )
+
+    const status = await getStatus(submoduleRepository)
+    if (status === null || status.currentTip === undefined) {
       continue
     }
 
@@ -286,9 +355,11 @@ export async function getSubmodulesToPush(
     let remote: IRemote | null = null
     let remoteBranchName: string | null = null
 
-    if (status.currentUpstreamBranch !== undefined) {
+    if (
+      status.currentBranch !== undefined &&
+      status.currentUpstreamBranch !== undefined
+    ) {
       const upstream = parseUpstreamRef(status.currentUpstreamBranch)
-
       if (upstream === null) {
         continue
       }
@@ -299,7 +370,30 @@ export async function getSubmodulesToPush(
       remote = findDefaultRemote(remotes)
     }
 
-    if (remote === null) {
+    if (
+      remote === null
+    ) {
+      continue
+    }
+
+    if (status.currentBranch === undefined) {
+      if (
+        await isCommitAvailableOnRemote(
+          submoduleRepository,
+          remote,
+          status.currentTip
+        )
+      ) {
+        continue
+      }
+
+      pushableSubmodules.push({
+        path: displayPath,
+        repository: submoduleRepository,
+        remote,
+        branchName: 'HEAD',
+        remoteBranchName: `refs/tags/desktop-submodule/${status.currentTip}`,
+      })
       continue
     }
 
@@ -316,15 +410,13 @@ export async function getSubmodulesToPush(
     }
 
     pushableSubmodules.push({
-      path: submodule.path,
+      path: displayPath,
       repository: submoduleRepository,
       remote,
       branchName: status.currentBranch,
       remoteBranchName,
     })
   }
-
-  return pushableSubmodules
 }
 
 export async function resetSubmodulePaths(
