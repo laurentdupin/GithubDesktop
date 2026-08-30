@@ -4140,41 +4140,106 @@ export class AppStore extends TypedBaseStore<IAppState> {
       signOff: boolean
     }
   ): Promise<boolean> {
+    const visitedRepositories = new Set<string>()
+
     for (const file of selectedFiles) {
       if (!hasDirtySubmoduleWorkingDirectoryChanges(file)) {
         continue
       }
 
-      const submoduleWorkingDirectory =
-        await getSubmoduleRepositoryWorkingDirectory(repository, file.path)
-
-      if (submoduleWorkingDirectory === null) {
-        continue
-      }
-
-      const submoduleFiles = getParentRepositoryWorkingDirectoryFiles(
-        WorkingDirectoryStatus.fromFiles(submoduleWorkingDirectory.files)
-      )
-
-      if (submoduleFiles.length === 0) {
-        continue
-      }
-
-      await createCommit(
-        submoduleWorkingDirectory.repository,
+      await this.commitSubmoduleWorkingDirectoryChanges(
+        repository,
+        file.path,
         message,
-        submoduleFiles,
-        {
-          onHookProgress: commitOptions.onHookProgress,
-          onHookFailure: commitOptions.onHookFailure,
-          onTerminalOutputAvailable: commitOptions.onTerminalOutputAvailable,
-          noVerify: commitOptions.noVerify,
-          signOff: commitOptions.signOff,
-        }
+        commitOptions,
+        visitedRepositories
       )
     }
 
     return true
+  }
+
+  private async commitSubmoduleWorkingDirectoryChanges(
+    parentRepository: Repository,
+    submodulePath: string,
+    message: string,
+    commitOptions: {
+      onHookProgress: ReturnType<AppStore['onHookProgress']>
+      onHookFailure: ReturnType<AppStore['onHookFailure']>
+      onTerminalOutputAvailable: TerminalOutputCallback
+      noVerify: boolean
+      signOff: boolean
+    },
+    visitedRepositories: Set<string>
+  ): Promise<void> {
+    let submoduleWorkingDirectory =
+      await getSubmoduleRepositoryWorkingDirectory(
+        parentRepository,
+        submodulePath
+      )
+
+    if (submoduleWorkingDirectory === null) {
+      return
+    }
+
+    const resolvedPath = Path.resolve(submoduleWorkingDirectory.repository.path)
+    const normalizedPath = __WIN32__ ? resolvedPath.toLowerCase() : resolvedPath
+    if (visitedRepositories.has(normalizedPath)) {
+      return
+    }
+    visitedRepositories.add(normalizedPath)
+
+    for (const file of submoduleWorkingDirectory.files) {
+      if (!hasDirtySubmoduleWorkingDirectoryChanges(file)) {
+        continue
+      }
+
+      await this.commitSubmoduleWorkingDirectoryChanges(
+        submoduleWorkingDirectory.repository,
+        file.path,
+        message,
+        commitOptions,
+        visitedRepositories
+      )
+    }
+
+    // Descendant commits update this repository's gitlinks, so reload before
+    // deciding whether this level has anything to commit.
+    submoduleWorkingDirectory = await getSubmoduleRepositoryWorkingDirectory(
+      parentRepository,
+      submodulePath
+    )
+
+    if (submoduleWorkingDirectory === null) {
+      return
+    }
+
+    const submoduleFiles = getParentRepositoryWorkingDirectoryFiles(
+      WorkingDirectoryStatus.fromFiles(submoduleWorkingDirectory.files)
+    )
+
+    if (submoduleFiles.length === 0) {
+      return
+    }
+
+    const result = await createCommit(
+      submoduleWorkingDirectory.repository,
+      message,
+      submoduleFiles,
+      {
+        onHookProgress: commitOptions.onHookProgress,
+        onHookFailure: commitOptions.onHookFailure,
+        onTerminalOutputAvailable: commitOptions.onTerminalOutputAvailable,
+        noVerify: commitOptions.noVerify,
+        signOff: commitOptions.signOff,
+      }
+    )
+
+    if (result === undefined) {
+      throw new Error(
+        `Unable to commit changes in submodule "${submoduleWorkingDirectory.repository.path}".`
+      )
+    }
   }
 
   private async _refreshRepositoryAfterCommit(

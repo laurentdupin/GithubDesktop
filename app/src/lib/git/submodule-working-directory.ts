@@ -32,7 +32,8 @@ function buildSyntheticSubmoduleStatus(
 function createSyntheticSubmoduleChange(
   parentSubmodulePath: string,
   submoduleRepositoryPath: string,
-  file: WorkingDirectoryFileChange
+  file: WorkingDirectoryFileChange,
+  depth: number
 ) {
   return new WorkingDirectoryFileChange(
     Path.posix.join(parentSubmodulePath, file.path),
@@ -41,6 +42,7 @@ function createSyntheticSubmoduleChange(
     {
       submodulePath: parentSubmodulePath,
       submoduleRepositoryPath,
+      depth,
       pathInSubmodule: file.path,
       oldPathInSubmodule:
         file.status.kind === AppFileStatusKind.Copied ||
@@ -85,6 +87,22 @@ export async function getSubmoduleWorkingDirectoryFiles(
   parentRepository: Repository,
   submodulePath: string
 ): Promise<ReadonlyArray<WorkingDirectoryFileChange>> {
+  return getSubmoduleWorkingDirectoryFilesRecursive(
+    parentRepository,
+    submodulePath,
+    submodulePath,
+    1,
+    new Set<string>()
+  )
+}
+
+async function getSubmoduleWorkingDirectoryFilesRecursive(
+  parentRepository: Repository,
+  submodulePath: string,
+  displaySubmodulePath: string,
+  depth: number,
+  visitedRepositories: Set<string>
+): Promise<ReadonlyArray<WorkingDirectoryFileChange>> {
   const submoduleWorkingDirectory = await getSubmoduleRepositoryWorkingDirectory(
     parentRepository,
     submodulePath
@@ -94,13 +112,49 @@ export async function getSubmoduleWorkingDirectoryFiles(
     return []
   }
 
-  return submoduleWorkingDirectory.files.map(file =>
-    createSyntheticSubmoduleChange(
-      submodulePath,
-      submoduleWorkingDirectory.repository.path,
-      file
-    )
+  const resolvedRepositoryPath = Path.resolve(
+    submoduleWorkingDirectory.repository.path
   )
+  const normalizedRepositoryPath = __WIN32__
+    ? resolvedRepositoryPath.toLowerCase()
+    : resolvedRepositoryPath
+  if (visitedRepositories.has(normalizedRepositoryPath)) {
+    return []
+  }
+  visitedRepositories.add(normalizedRepositoryPath)
+
+  const expanded = new Array<WorkingDirectoryFileChange>()
+
+  for (const file of submoduleWorkingDirectory.files) {
+    expanded.push(
+      createSyntheticSubmoduleChange(
+        displaySubmodulePath,
+        submoduleWorkingDirectory.repository.path,
+        file,
+        depth
+      )
+    )
+
+    if (
+      file.status.submoduleStatus?.modifiedChanges === true ||
+      file.status.submoduleStatus?.untrackedChanges === true
+    ) {
+      const nestedDisplayPath = Path.posix.join(
+        displaySubmodulePath,
+        file.path
+      )
+      const nestedFiles = await getSubmoduleWorkingDirectoryFilesRecursive(
+        submoduleWorkingDirectory.repository,
+        file.path,
+        nestedDisplayPath,
+        depth + 1,
+        visitedRepositories
+      )
+      expanded.push(...nestedFiles)
+    }
+  }
+
+  return expanded
 }
 
 export async function expandWorkingDirectoryWithSubmoduleChanges(

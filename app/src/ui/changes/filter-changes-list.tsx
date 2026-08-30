@@ -487,6 +487,9 @@ export class FilterChangesList extends React.Component<
         className={
           syntheticSubmoduleChange ? 'synthetic-submodule-change' : undefined
         }
+        indentationLevel={
+          syntheticSubmoduleChange ? file.submoduleChange.depth : 0
+        }
         checkboxTooltip={checkboxTooltip}
         focused={this.state.focusedRow === changeListItem.id}
         matches={matches}
@@ -780,6 +783,10 @@ export class FilterChangesList extends React.Component<
       this.props.dispatcher.appendIgnoreFile(submoduleChange.repository, pattern)
     const onIgnorePattern = (pattern: string | string[]) =>
       this.props.dispatcher.appendIgnoreRule(submoduleChange.repository, pattern)
+    const repositoryPath =
+      file.status.submoduleStatus === undefined
+        ? submoduleChange.repository.path
+        : Path.join(submoduleChange.repository.path, submoduleChange.file.path)
 
     return [
       this.getCopyPathMenuItem(file),
@@ -793,7 +800,7 @@ export class FilterChangesList extends React.Component<
       { type: 'separator' },
       this.getRevealInFileManagerMenuItem(file),
       this.getAddSubmoduleRepositoryMenuItem(
-        submoduleChange.repository.path,
+        repositoryPath,
         enabled
       ),
       this.getOpenInExternalEditorMenuItem(file, enabled),

@@ -131,6 +131,8 @@ export type SubmoduleChange = {
   readonly submodulePath: string
   /** The absolute path to the submodule repository on disk. */
   readonly submoduleRepositoryPath: string
+  /** Number of submodule boundaries between the root repository and this file. */
+  readonly depth: number
   /** The path of the changed file within the submodule repository. */
   readonly pathInSubmodule: string
   /**
