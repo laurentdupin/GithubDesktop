@@ -416,6 +416,21 @@ async function collectSubmodulesToPush(
       ? `${parentPath}/${submodule.path}`
       : submodule.path
 
+    if (commitSha !== undefined) {
+      const objectCheck = await git(
+        ['cat-file', '-e', `${submodule.sha}^{commit}`],
+        submoduleRepository.path,
+        'verifyLocalSubmoduleCommit',
+        { successExitCodes: new Set([0, 1, 128]) }
+      )
+
+      if (objectCheck.exitCode !== 0) {
+        throw new Error(
+          `Unable to verify submodule "${displayPath}" because commit ${submodule.sha} is not available locally. Initialize or fetch the submodule, or commit a valid submodule pointer before pushing the parent repository.`
+        )
+      }
+    }
+
     // Push descendants first so every commit referenced by a parent submodule
     // is available remotely before that parent's branch is pushed.
     await collectSubmodulesToPush(

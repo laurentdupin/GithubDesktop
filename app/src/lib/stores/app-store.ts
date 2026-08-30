@@ -5857,10 +5857,19 @@ export class AppStore extends TypedBaseStore<IAppState> {
         branch: branch.name,
       })
 
-      const submodulesToPush = await this.getSubmodulesToPushForParentPush(
+      const gitStore = this.gitStoreCache.get(repository)
+      const retryAction: RetryAction = {
+        type: RetryActionType.Push,
         repository,
-        branch
+      }
+      const submodulesToPush = await gitStore.performFailableOperation(
+        () => this.getSubmodulesToPushForParentPush(repository, branch),
+        { retryAction }
       )
+
+      if (submodulesToPush === undefined) {
+        return
+      }
 
       // Let's say that a push takes roughly twice as long as a fetch,
       // this is of course highly inaccurate.
@@ -5879,11 +5888,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
       submodulePushWeight *= scale
       pushWeight *= scale
       fetchWeight *= scale
-
-      const retryAction: RetryAction = {
-        type: RetryActionType.Push,
-        repository,
-      }
 
       // This is most likely not necessary and is only here out of
       // an abundance of caution. We're introducing support for
@@ -5923,7 +5927,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
         )
       }
 
-      const gitStore = this.gitStoreCache.get(repository)
       await gitStore.performFailableOperation(
         async () => {
           const submodulePushesSucceeded =

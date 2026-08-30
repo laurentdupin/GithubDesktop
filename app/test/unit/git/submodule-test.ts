@@ -272,6 +272,33 @@ describe('git/submodule', () => {
       )
     })
 
+    it('fails closed with a clear error when a recorded gitlink object is missing', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const missingCommit = '1111111111111111111111111111111111111111'
+
+      await exec(
+        [
+          'update-index',
+          '--cacheinfo',
+          `160000,${missingCommit},foo/submodule`,
+        ],
+        testRepoPath
+      )
+      await exec(['commit', '-m', 'record missing gitlink'], testRepoPath)
+      const parentCommit = (
+        await exec(['rev-parse', 'HEAD'], testRepoPath)
+      ).stdout.trim()
+
+      await assert.rejects(
+        getSubmodulesToPush(repository, undefined, parentCommit),
+        /commit 1111111111111111111111111111111111111111 is not available locally/
+      )
+    })
+
     it('returns nested submodules before their parents', async t => {
       const testRepoPath = await setupFixtureRepository(
         t,
