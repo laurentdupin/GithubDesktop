@@ -87,8 +87,44 @@ async function isCommitAvailableOnRemote(
     'isSubmoduleCommitAvailableOnRemote'
   )
 
-  if (remoteBranches.trim().length > 0) {
-    return true
+  const remoteBranchRefs = remoteBranches
+    .split('\n')
+    .map(ref => ref.trim())
+    .filter(ref => ref.length > 0 && !ref.endsWith('/HEAD'))
+    .map(ref =>
+      ref.replace(`refs/remotes/${remote.name}/`, 'refs/heads/')
+    )
+
+  if (remoteBranchRefs.length > 0) {
+    const { stdout: advertisedBranches } = await git(
+      ['ls-remote', '--heads', remote.name, ...remoteBranchRefs],
+      repository.path,
+      'verifyRemoteSubmoduleBranches',
+      {
+        env: await envForRemoteOperation(remote.url),
+        expectedErrors: AuthenticationErrors,
+      }
+    )
+
+    for (const line of advertisedBranches.split('\n')) {
+      const [tip] = line.split('\t')
+      if (tip === commitSha) {
+        return true
+      }
+
+      if (tip?.length > 0) {
+        const result = await git(
+          ['merge-base', '--is-ancestor', commitSha, tip],
+          repository.path,
+          'verifySubmoduleCommitAncestor',
+          { successExitCodes: new Set([0, 1, 128]) }
+        )
+
+        if (result.exitCode === 0) {
+          return true
+        }
+      }
+    }
   }
 
   const { stdout: localTags } = await git(
@@ -97,15 +133,15 @@ async function isCommitAvailableOnRemote(
     'getSubmoduleCommitTags'
   )
   const tagNames = localTags.split('\n').filter(x => x.length > 0)
-
-  if (tagNames.length === 0) {
-    return false
-  }
-
-  const tagRefs = tagNames.flatMap(tagName => [
-    `refs/tags/${tagName}`,
-    `refs/tags/${tagName}^{}`,
-  ])
+  const syntheticTag = `refs/tags/desktop-submodule/${commitSha}`
+  const tagRefs = [
+    syntheticTag,
+    `${syntheticTag}^{}`,
+    ...tagNames.flatMap(tagName => [
+      `refs/tags/${tagName}`,
+      `refs/tags/${tagName}^{}`,
+    ]),
+  ]
   const { stdout: remoteTags } = await git(
     ['ls-remote', '--tags', remote.name, ...tagRefs],
     repository.path,
@@ -306,7 +342,8 @@ export async function listSubmodules(
 
 export async function getSubmodulesToPush(
   repository: Repository,
-  candidatePaths?: ReadonlySet<string>
+  candidatePaths?: ReadonlySet<string>,
+  commitSha?: string
 ): Promise<ReadonlyArray<SubmodulePushContext>> {
   if (candidatePaths !== undefined && candidatePaths.size === 0) {
     return []
@@ -322,7 +359,8 @@ export async function getSubmodulesToPush(
     '',
     candidatePaths,
     visitedRepositoryPaths,
-    pushableSubmodules
+    pushableSubmodules,
+    commitSha
   )
 
   return pushableSubmodules
@@ -338,9 +376,13 @@ async function collectSubmodulesToPush(
   parentPath: string,
   candidatePaths: ReadonlySet<string> | undefined,
   visitedRepositoryPaths: Set<string>,
-  pushableSubmodules: Array<SubmodulePushContext>
+  pushableSubmodules: Array<SubmodulePushContext>,
+  commitSha?: string
 ): Promise<void> {
-  const submodules = await listSubmodules(repository)
+  const submodules =
+    commitSha === undefined
+      ? await listSubmodules(repository)
+      : await listSubmodulesAtCommit(repository, commitSha)
 
   for (const submodule of submodules) {
     if (candidatePaths !== undefined && !candidatePaths.has(submodule.path)) {
@@ -349,6 +391,14 @@ async function collectSubmodulesToPush(
 
     const submoduleRepositoryPath = join(repository.path, submodule.path)
     if (!(await pathExists(join(submoduleRepositoryPath, '.git')))) {
+      if (commitSha !== undefined) {
+        throw new Error(
+          `Unable to verify submodule "${
+            parentPath ? `${parentPath}/${submodule.path}` : submodule.path
+          }" because it is not initialized.`
+        )
+      }
+
       continue
     }
 
@@ -373,11 +423,18 @@ async function collectSubmodulesToPush(
       displayPath,
       undefined,
       visitedRepositoryPaths,
-      pushableSubmodules
+      pushableSubmodules,
+      submodule.sha
     )
 
     const status = await getStatus(submoduleRepository)
     if (status === null || status.currentTip === undefined) {
+      if (commitSha !== undefined) {
+        throw new Error(
+          `Unable to verify submodule "${displayPath}" because its repository status is unavailable.`
+        )
+      }
+
       continue
     }
 
@@ -391,6 +448,12 @@ async function collectSubmodulesToPush(
     ) {
       const upstream = parseUpstreamRef(status.currentUpstreamBranch)
       if (upstream === null) {
+        if (commitSha !== undefined) {
+          throw new Error(
+            `Unable to verify submodule "${displayPath}" because its upstream branch is invalid.`
+          )
+        }
+
         continue
       }
 
@@ -400,34 +463,45 @@ async function collectSubmodulesToPush(
       remote = findDefaultRemote(remotes)
     }
 
+    if (remote === null) {
+      if (commitSha !== undefined) {
+        throw new Error(
+          `Unable to verify submodule "${displayPath}" because it has no remote.`
+        )
+      }
+
+      continue
+    }
+
+    const referencedCommit =
+      commitSha === undefined ? status.currentTip : submodule.sha
+
     if (
-      remote === null
+      await isCommitAvailableOnRemote(
+        submoduleRepository,
+        remote,
+        referencedCommit
+      )
     ) {
       continue
     }
 
-    if (status.currentBranch === undefined) {
-      if (
-        await isCommitAvailableOnRemote(
-          submoduleRepository,
-          remote,
-          status.currentTip
-        )
-      ) {
-        continue
-      }
-
+    if (
+      status.currentBranch === undefined ||
+      status.currentTip !== referencedCommit
+    ) {
       pushableSubmodules.push({
         path: displayPath,
         repository: submoduleRepository,
         remote,
-        branchName: 'HEAD',
-        remoteBranchName: `refs/tags/desktop-submodule/${status.currentTip}`,
+        branchName: referencedCommit,
+        remoteBranchName: `refs/tags/desktop-submodule/${referencedCommit}`,
       })
       continue
     }
 
     if (
+      commitSha === undefined &&
       !(await shouldPushSubmodule(
         submoduleRepository,
         status.currentBranch,
@@ -447,6 +521,27 @@ async function collectSubmodulesToPush(
       remoteBranchName,
     })
   }
+}
+
+async function listSubmodulesAtCommit(
+  repository: Repository,
+  commitSha: string
+): Promise<ReadonlyArray<SubmoduleEntry>> {
+  const { stdout } = await git(
+    ['ls-tree', '-r', '-z', commitSha],
+    repository.path,
+    'listSubmodulesAtCommit'
+  )
+  const submodules = new Array<SubmoduleEntry>()
+
+  for (const entry of stdout.split('\0')) {
+    const match = /^160000 commit ([0-9a-f]+)\t(.+)$/.exec(entry)
+    if (match !== null) {
+      submodules.push(new SubmoduleEntry(match[1], match[2], ''))
+    }
+  }
+
+  return submodules
 }
 
 export async function resetSubmodulePaths(

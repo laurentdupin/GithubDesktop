@@ -360,7 +360,6 @@ import { createTutorialRepository } from './helpers/create-tutorial-repository'
 import { sendNonFatalException } from '../helpers/non-fatal-exception'
 import { getDefaultDir } from '../../ui/lib/default-dir'
 import {
-  getTrackSubmoduleWorkingTreeChanges,
   WorkflowPreferences,
 } from '../../models/workflow-preferences'
 import { RepositoryIndicatorUpdater } from './helpers/repository-indicator-updater'
@@ -742,8 +741,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
     number,
     Promise<ReadonlyArray<IForkSyncPreviewEntry>>
   >()
-  private readonly submoduleTrackingLogState = new Map<number, boolean>()
-
   /** The function to resolve the current Open in Desktop flow. */
   private resolveOpenInDesktop:
     | ((repository: Repository | null) => void)
@@ -3113,23 +3110,17 @@ export class AppStore extends TypedBaseStore<IAppState> {
     clearPartialState: boolean = false
   ): Promise<IStatusResult | null> {
     const gitStore = this.gitStoreCache.get(repository)
-    const trackSubmoduleWorkingTreeChanges =
-      this.shouldTrackSubmoduleWorkingTreeChanges(repository)
-
-    const status = await gitStore.loadStatus(
-      !trackSubmoduleWorkingTreeChanges
-    )
+    const status = await gitStore.loadStatus(false)
 
     if (status === null) {
       return null
     }
 
-    const expandedWorkingDirectoryFiles = trackSubmoduleWorkingTreeChanges
-      ? await expandWorkingDirectoryWithSubmoduleChanges(
-          repository,
-          status.workingDirectory.files
-        )
-      : status.workingDirectory.files
+    const expandedWorkingDirectoryFiles =
+      await expandWorkingDirectoryWithSubmoduleChanges(
+        repository,
+        status.workingDirectory.files
+      )
 
     const expandedStatus: IStatusResult = {
       ...status,
@@ -3165,28 +3156,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
     this.updateChangesWorkingDirectoryDiff(repository)
 
     return expandedStatus
-  }
-
-  private shouldTrackSubmoduleWorkingTreeChanges(
-    repository: Repository
-  ): boolean {
-    const trackSubmoduleWorkingTreeChanges =
-      getTrackSubmoduleWorkingTreeChanges(repository.workflowPreferences)
-    const previous = this.submoduleTrackingLogState.get(repository.id)
-
-    if (previous !== trackSubmoduleWorkingTreeChanges) {
-      this.submoduleTrackingLogState.set(
-        repository.id,
-        trackSubmoduleWorkingTreeChanges
-      )
-      log.info(
-        `[SubmoduleTracking] ${
-          trackSubmoduleWorkingTreeChanges ? 'Tracking' : 'Ignoring'
-        } submodule working tree changes for ${repository.path}`
-      )
-    }
-
-    return trackSubmoduleWorkingTreeChanges
   }
 
   /**
@@ -4664,9 +4633,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
     }
 
     const gitStore = this.gitStoreCache.get(repository)
-    const status = await gitStore.loadStatus(
-      !this.shouldTrackSubmoduleWorkingTreeChanges(repository)
-    )
+    const status = await gitStore.loadStatus(false)
     if (status === null) {
       lookup.delete(repository.id)
       return
@@ -5765,54 +5732,17 @@ export class AppStore extends TypedBaseStore<IAppState> {
     return true
   }
 
-  private async getChangedSubmodulePathsForPush(
-    repository: Repository,
-    branch: Branch
-  ): Promise<ReadonlySet<string> | undefined> {
-    if (branch.upstream === null) {
-      return undefined
-    }
-
-    const changedFiles = await getBranchMergeBaseChangedFiles(
-      repository,
-      branch.upstream,
-      branch.name,
-      branch.tip.sha
-    )
-
-    if (changedFiles === null) {
-      return undefined
-    }
-
-    const submodulePaths = new Set<string>()
-
-    for (const file of changedFiles.files) {
-      if (file.status.submoduleStatus !== undefined) {
-        submodulePaths.add(file.path)
-      }
-    }
-
-    return submodulePaths
-  }
-
   private async getSubmodulesToPushForParentPush(
     repository: Repository,
     branch: Branch
   ): Promise<ReadonlyArray<SubmodulePushContext>> {
-    const changedSubmodulePaths = await this.getChangedSubmodulePathsForPush(
-      repository,
-      branch
-    ).catch(error => {
-      log.warn(
-        `Unable to determine changed submodule paths before pushing ${repository.path}. Falling back to scanning all submodules.`,
-        error
-      )
-      return undefined
-    })
-
+    // Always validate the complete gitlink graph recorded in the parent commit.
+    // Filtering to changed gitlinks can permanently hide an unavailable child
+    // after an unsafe parent push has already introduced that gitlink upstream.
     const submodules = await getSubmodulesToPush(
       repository,
-      changedSubmodulePaths
+      undefined,
+      branch.tip.sha
     )
 
     if (submodules.length > 0) {
@@ -5862,18 +5792,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
         branch: branch.name,
       })
 
-      const trackSubmoduleWorkingTreeChanges =
-        this.shouldTrackSubmoduleWorkingTreeChanges(repository)
-
-      if (!trackSubmoduleWorkingTreeChanges) {
-        log.info(
-          `[SubmoduleTracking] Skipping submodule push checks for ${repository.path}`
-        )
-      }
-
-      const submodulesToPush = trackSubmoduleWorkingTreeChanges
-        ? await this.getSubmodulesToPushForParentPush(repository, branch)
-        : []
+      const submodulesToPush = await this.getSubmodulesToPushForParentPush(
+        repository,
+        branch
+      )
 
       // Let's say that a push takes roughly twice as long as a fetch,
       // this is of course highly inaccurate.
@@ -5949,6 +5871,18 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
           if (!submodulePushesSucceeded) {
             return
+          }
+
+          const unavailableSubmodules =
+            await this.getSubmodulesToPushForParentPush(repository, branch)
+
+          if (unavailableSubmodules.length > 0) {
+            const paths = unavailableSubmodules
+              .map(submodule => submodule.path)
+              .join(', ')
+            throw new Error(
+              `The parent repository was not pushed because these submodule commits could not be verified on their remotes: ${paths}`
+            )
           }
 
           let aborted = false
@@ -10464,9 +10398,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return
     }
 
-    const status = await gitStore.loadStatus(
-      !this.shouldTrackSubmoduleWorkingTreeChanges(repository)
-    )
+    const status = await gitStore.loadStatus(false)
     return status?.currentBranch
   }
 

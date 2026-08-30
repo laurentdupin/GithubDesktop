@@ -167,7 +167,7 @@ describe('git/submodule', () => {
       const result = await getSubmodulesToPush(repository)
       assert.equal(result.length, 1)
       assert.equal(result[0].path, 'foo/submodule')
-      assert.equal(result[0].branchName, 'HEAD')
+      assert.equal(result[0].branchName, head)
       assert.equal(
         result[0].remoteBranchName,
         `refs/tags/desktop-submodule/${head}`
@@ -204,15 +204,72 @@ describe('git/submodule', () => {
       await writeFile(path.join(submodulePath, 'README.md'), 'tagged change')
       await exec(['commit', '-am', 'tagged submodule commit'], submodulePath)
       const head = (await exec(['rev-parse', 'HEAD'], submodulePath)).stdout.trim()
-      await exec(['tag', 'remote-only-tag', head], submodulePath)
       await exec(
-        ['push', 'origin', 'refs/tags/remote-only-tag'],
+        [
+          'push',
+          'origin',
+          `${head}:refs/tags/desktop-submodule/${head}`,
+        ],
         submodulePath
       )
       await exec(['checkout', '--detach', head], submodulePath)
 
       const result = await getSubmodulesToPush(repository)
       assert.equal(result.length, 0)
+    })
+
+    it('checks the gitlink recorded in the parent commit instead of the submodule checkout', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+
+      await writeFile(path.join(submodulePath, 'README.md'), 'unpublished')
+      await exec(['commit', '-am', 'unpublished submodule commit'], submodulePath)
+      const unpublishedCommit = (
+        await exec(['rev-parse', 'HEAD'], submodulePath)
+      ).stdout.trim()
+
+      await exec(['add', 'foo/submodule'], testRepoPath)
+      await exec(['commit', '-m', 'record unpublished gitlink'], testRepoPath)
+      const parentCommit = (
+        await exec(['rev-parse', 'HEAD'], testRepoPath)
+      ).stdout.trim()
+
+      await exec(['checkout', '--detach', 'HEAD^'], submodulePath)
+
+      const result = await getSubmodulesToPush(
+        repository,
+        undefined,
+        parentCommit
+      )
+      assert.equal(result.length, 1)
+      assert.equal(result[0].path, 'foo/submodule')
+      assert.equal(result[0].branchName, unpublishedCommit)
+      assert.equal(
+        result[0].remoteBranchName,
+        `refs/tags/desktop-submodule/${unpublishedCommit}`
+      )
+    })
+
+    it('fails closed when a gitlink in the parent commit is not initialized', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const parentCommit = (
+        await exec(['rev-parse', 'HEAD'], testRepoPath)
+      ).stdout.trim()
+
+      await exec(['submodule', 'deinit', '-f', 'foo/submodule'], testRepoPath)
+
+      await assert.rejects(
+        getSubmodulesToPush(repository, undefined, parentCommit),
+        /not initialized/
+      )
     })
 
     it('returns nested submodules before their parents', async t => {
@@ -260,8 +317,17 @@ describe('git/submodule', () => {
       await exec(['add', '.'], nestedPath)
       await exec(['commit', '-m', 'update nested submodule'], nestedPath)
       await exec(['commit', '-am', 'update nested submodule pointer'], submodulePath)
+      await exec(['add', 'foo/submodule'], testRepoPath)
+      await exec(['commit', '-m', 'update parent submodule pointer'], testRepoPath)
+      const parentCommit = (
+        await exec(['rev-parse', 'HEAD'], testRepoPath)
+      ).stdout.trim()
 
-      const result = await getSubmodulesToPush(repository)
+      const result = await getSubmodulesToPush(
+        repository,
+        undefined,
+        parentCommit
+      )
       assert.deepEqual(
         result.map(x => x.path),
         ['foo/submodule/nested', 'foo/submodule']

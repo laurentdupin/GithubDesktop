@@ -12,15 +12,4 @@ export type WorkflowPreferences = {
    */
   readonly forkContributionTarget?: ForkContributionTarget
 
-  /**
-   * Whether Desktop should inspect submodule working trees when refreshing the
-   * parent repository changes list.
-   */
-  readonly trackSubmoduleWorkingTreeChanges?: boolean
-}
-
-export function getTrackSubmoduleWorkingTreeChanges(
-  workflowPreferences: WorkflowPreferences
-): boolean {
-  return workflowPreferences.trackSubmoduleWorkingTreeChanges !== false
 }
