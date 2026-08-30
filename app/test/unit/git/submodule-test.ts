@@ -150,6 +150,48 @@ describe('git/submodule', () => {
       )
     })
 
+    it('publishes a diverged submodule commit as a tag', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+      const remotePath = await createTempDirectory(t)
+      const remoteUpdaterPath = await createTempDirectory(t)
+
+      await exec(['init', '--bare'], remotePath)
+      await exec(['remote', 'set-url', 'origin', remotePath], submodulePath)
+      await exec(['push', '-u', 'origin', 'master'], submodulePath)
+
+      await writeFile(path.join(submodulePath, 'README.md'), 'local change')
+      await exec(['commit', '-am', 'local change'], submodulePath)
+      const localCommit = (
+        await exec(['rev-parse', 'HEAD'], submodulePath)
+      ).stdout.trim()
+
+      await exec(['clone', remotePath, remoteUpdaterPath], testRepoPath)
+      await exec(
+        ['config', 'user.name', 'GitHub Desktop Test'],
+        remoteUpdaterPath
+      )
+      await exec(
+        ['config', 'user.email', 'test@githubdesktop.invalid'],
+        remoteUpdaterPath
+      )
+      await writeFile(path.join(remoteUpdaterPath, 'README.md'), 'remote change')
+      await exec(['commit', '-am', 'remote change'], remoteUpdaterPath)
+      await exec(['push', 'origin', 'master'], remoteUpdaterPath)
+
+      const result = await getSubmodulesToPush(repository)
+      assert.equal(result.length, 1)
+      assert.equal(result[0].branchName, localCommit)
+      assert.equal(
+        result[0].remoteBranchName,
+        `refs/tags/desktop-submodule/${localCommit}`
+      )
+    })
+
     it('publishes an unavailable detached commit as a tag', async t => {
       const testRepoPath = await setupFixtureRepository(
         t,

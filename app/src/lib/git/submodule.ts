@@ -70,6 +70,72 @@ async function shouldPushSubmodule(
   return aheadBehind === null || aheadBehind.ahead > 0
 }
 
+type SubmoduleBranchPublishStrategy = 'available' | 'branch' | 'tag'
+
+async function getSubmoduleBranchPublishStrategy(
+  repository: Repository,
+  remote: IRemote,
+  branchName: string,
+  commitSha: string
+): Promise<SubmoduleBranchPublishStrategy> {
+  const remoteBranchRef = `refs/heads/${branchName}`
+  const { stdout: advertisedBranch } = await git(
+    ['ls-remote', '--heads', remote.name, remoteBranchRef],
+    repository.path,
+    'getRemoteSubmoduleBranchTip',
+    {
+      env: await envForRemoteOperation(remote.url),
+      expectedErrors: AuthenticationErrors,
+    }
+  )
+  const advertisedSha = advertisedBranch.split('\t')[0]
+  if (advertisedSha.length === 0) {
+    return 'branch'
+  }
+
+  const objectCheck = await git(
+    ['cat-file', '-e', `${advertisedSha}^{commit}`],
+    repository.path,
+    'verifyRemoteSubmoduleBranchTip',
+    { successExitCodes: new Set([0, 1, 128]) }
+  )
+  if (objectCheck.exitCode !== 0) {
+    await git(
+      [
+        'fetch',
+        '--no-tags',
+        '--no-write-fetch-head',
+        remote.name,
+        remoteBranchRef,
+      ],
+      repository.path,
+      'fetchRemoteSubmoduleBranchTip',
+      {
+        env: await envForRemoteOperation(remote.url),
+        expectedErrors: AuthenticationErrors,
+      }
+    )
+  }
+
+  const localIsPublished = await git(
+    ['merge-base', '--is-ancestor', commitSha, advertisedSha],
+    repository.path,
+    'verifySubmoduleCommitOnRemoteBranch',
+    { successExitCodes: new Set([0, 1, 128]) }
+  )
+  if (localIsPublished.exitCode === 0) {
+    return 'available'
+  }
+
+  const branchCanFastForward = await git(
+    ['merge-base', '--is-ancestor', advertisedSha, commitSha],
+    repository.path,
+    'verifySubmoduleBranchCanFastForward',
+    { successExitCodes: new Set([0, 1, 128]) }
+  )
+  return branchCanFastForward.exitCode === 0 ? 'branch' : 'tag'
+}
+
 async function isCommitAvailableOnRemote(
   repository: Repository,
   remote: IRemote,
@@ -662,10 +728,27 @@ async function collectSubmodulesToPush(
       referencedCommit
     )
 
-    if (
-      status.currentBranch === undefined ||
-      status.currentTip !== referencedCommit
-    ) {
+    if (status.currentBranch === undefined || status.currentTip !== referencedCommit) {
+      pushableSubmodules.push({
+        path: displayPath,
+        repository: submoduleRepository,
+        remote,
+        branchName: referencedCommit,
+        remoteBranchName: `refs/tags/desktop-submodule/${referencedCommit}`,
+      })
+      continue
+    }
+
+    const publishStrategy = await getSubmoduleBranchPublishStrategy(
+      submoduleRepository,
+      remote,
+      remoteBranchName ?? status.currentBranch,
+      referencedCommit
+    )
+    if (publishStrategy === 'available') {
+      continue
+    }
+    if (publishStrategy === 'tag') {
       pushableSubmodules.push({
         path: displayPath,
         repository: submoduleRepository,
