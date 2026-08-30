@@ -135,7 +135,7 @@ describe('git/push', () => {
 
     const remote: IRemote = { name: 'origin', url: barePath }
     const tagRef = `refs/tags/desktop-submodule/${head}`
-    await push(repo, remote, 'HEAD', tagRef, null, { checkSubmodules: true })
+    await push(repo, remote, 'HEAD', tagRef, null)
 
     const result = await exec(['rev-parse', tagRef], barePath)
     assert.equal(result.stdout.trim(), head)

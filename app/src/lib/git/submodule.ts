@@ -75,20 +75,50 @@ async function isCommitAvailableOnRemote(
   remote: IRemote,
   commitSha: string
 ) {
-  const { stdout } = await git(
+  const { stdout: remoteBranches } = await git(
     [
       'for-each-ref',
       '--contains',
       commitSha,
       '--format=%(refname)',
       `refs/remotes/${remote.name}/`,
-      'refs/tags/',
     ],
     repository.path,
     'isSubmoduleCommitAvailableOnRemote'
   )
 
-  return stdout.trim().length > 0
+  if (remoteBranches.trim().length > 0) {
+    return true
+  }
+
+  const { stdout: localTags } = await git(
+    ['tag', '--points-at', commitSha],
+    repository.path,
+    'getSubmoduleCommitTags'
+  )
+  const tagNames = localTags.split('\n').filter(x => x.length > 0)
+
+  if (tagNames.length === 0) {
+    return false
+  }
+
+  const tagRefs = tagNames.flatMap(tagName => [
+    `refs/tags/${tagName}`,
+    `refs/tags/${tagName}^{}`,
+  ])
+  const { stdout: remoteTags } = await git(
+    ['ls-remote', '--tags', remote.name, ...tagRefs],
+    repository.path,
+    'getRemoteSubmoduleCommitTags',
+    {
+      env: await envForRemoteOperation(remote.url),
+      expectedErrors: AuthenticationErrors,
+    }
+  )
+
+  return remoteTags
+    .split('\n')
+    .some(line => line.startsWith(`${commitSha}\t`))
 }
 
 /**

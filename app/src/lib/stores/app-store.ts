@@ -5735,7 +5735,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
         null,
         {
           noVerify: options?.noVerify,
-          checkSubmodules: true,
           onHookFailure: this.onHookFailure(() => (aborted = true)),
         },
         progress => {
@@ -5811,7 +5810,20 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return undefined
     })
 
-    return getSubmodulesToPush(repository, changedSubmodulePaths)
+    const submodules = await getSubmodulesToPush(
+      repository,
+      changedSubmodulePaths
+    )
+
+    if (submodules.length > 0) {
+      log.info(
+        `[SubmodulePush] Deepest-first push order for ${repository.path}: ${submodules
+          .map(submodule => submodule.path)
+          .join(' -> ')}`
+      )
+    }
+
+    return submodules
   }
 
   private async performPush(
@@ -5949,7 +5961,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
             {
               onHookFailure: this.onHookFailure(() => (aborted = true)),
               ...options,
-              checkSubmodules: true,
             },
             progress => {
               this.updatePushPullFetchProgress(repository, {

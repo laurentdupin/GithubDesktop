@@ -161,6 +161,7 @@ describe('git/submodule', () => {
       await writeFile(path.join(submodulePath, 'README.md'), 'detached change')
       await exec(['commit', '-am', 'detached submodule commit'], submodulePath)
       const head = (await exec(['rev-parse', 'HEAD'], submodulePath)).stdout.trim()
+      await exec(['tag', 'local-only-tag', head], submodulePath)
       await exec(['checkout', '--detach', head], submodulePath)
 
       const result = await getSubmodulesToPush(repository)
@@ -182,6 +183,32 @@ describe('git/submodule', () => {
       const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
       const head = (await exec(['rev-parse', 'HEAD'], submodulePath)).stdout.trim()
 
+      await exec(['checkout', '--detach', head], submodulePath)
+
+      const result = await getSubmodulesToPush(repository)
+      assert.equal(result.length, 0)
+    })
+
+    it('skips a detached commit available only through a remote tag', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+      const remotePath = await createTempDirectory(t)
+
+      await exec(['init', '--bare'], remotePath)
+      await exec(['remote', 'set-url', 'origin', remotePath], submodulePath)
+
+      await writeFile(path.join(submodulePath, 'README.md'), 'tagged change')
+      await exec(['commit', '-am', 'tagged submodule commit'], submodulePath)
+      const head = (await exec(['rev-parse', 'HEAD'], submodulePath)).stdout.trim()
+      await exec(['tag', 'remote-only-tag', head], submodulePath)
+      await exec(
+        ['push', 'origin', 'refs/tags/remote-only-tag'],
+        submodulePath
+      )
       await exec(['checkout', '--detach', head], submodulePath)
 
       const result = await getSubmodulesToPush(repository)
