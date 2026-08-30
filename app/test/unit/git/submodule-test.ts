@@ -316,6 +316,14 @@ describe('git/submodule', () => {
       )
       await exec(['commit', '-am', 'add nested submodule'], submodulePath)
       await exec(['push', 'origin', 'master'], submodulePath)
+
+      // Simulate a checkout whose remote-tracking ref was not refreshed after
+      // another recursive repository operation advanced the server branch.
+      // The advertised server tip still records the unchanged nested gitlink.
+      await exec(
+        ['update-ref', 'refs/remotes/origin/master', 'HEAD^'],
+        submodulePath
+      )
       await exec(['submodule', 'deinit', '-f', 'nested'], submodulePath)
 
       await writeFile(path.join(submodulePath, 'README.md'), 'parent change')

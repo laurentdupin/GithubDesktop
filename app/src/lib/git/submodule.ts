@@ -167,9 +167,11 @@ function gitlinkKey(path: string, sha: string) {
  * traversed again when publishing a newer parent commit: the remote parent
  * already proves that exact gitlink was published previously.
  *
- * Only local remote-tracking refs which still exactly match the server's
- * advertised branch tips are trusted. A stale or rewritten tracking ref must
- * not weaken the push safety check.
+ * The server-advertised branch tips are inspected directly. A matching local
+ * remote-tracking ref can be used as-is; otherwise the advertised tip is
+ * fetched without updating the user's refs when its object is not available
+ * locally. A stale or rewritten tracking ref must not weaken the push safety
+ * check or prevent an unchanged child from being recognized.
  */
 async function getGitlinksRecordedOnRemoteTips(repository: Repository) {
   const gitlinks = new Set<string>()
@@ -222,13 +224,61 @@ async function getGitlinksRecordedOnRemoteTips(repository: Repository) {
       const [advertisedSha, remoteRef] = line.split('\t')
       const localTip =
         remoteRef === undefined ? undefined : localTips.get(remoteRef)
-      if (localTip === undefined || localTip.sha !== advertisedSha) {
+      if (
+        advertisedSha === undefined ||
+        advertisedSha.length === 0 ||
+        remoteRef === undefined
+      ) {
+        continue
+      }
+
+      let tipToInspect = localTip?.localRef
+      if (localTip?.sha !== advertisedSha) {
+        const objectCheck = await git(
+          ['cat-file', '-e', `${advertisedSha}^{commit}`],
+          repository.path,
+          'verifyAdvertisedParentTipForSubmodulePush',
+          { successExitCodes: new Set([0, 1, 128]) }
+        )
+
+        if (objectCheck.exitCode !== 0) {
+          await git(
+            [
+              'fetch',
+              '--no-tags',
+              '--no-write-fetch-head',
+              remote.name,
+              remoteRef,
+            ],
+            repository.path,
+            'fetchAdvertisedParentTipForSubmodulePush',
+            {
+              env: await envForRemoteOperation(remote.url),
+              expectedErrors: AuthenticationErrors,
+            }
+          )
+        }
+
+        const fetchedObjectCheck = await git(
+          ['cat-file', '-e', `${advertisedSha}^{commit}`],
+          repository.path,
+          'verifyFetchedParentTipForSubmodulePush',
+          { successExitCodes: new Set([0, 1, 128]) }
+        )
+        if (fetchedObjectCheck.exitCode !== 0) {
+          continue
+        }
+
+        tipToInspect = advertisedSha
+      }
+
+      if (tipToInspect === undefined) {
         continue
       }
 
       for (const submodule of await listSubmodulesAtCommit(
         repository,
-        localTip.localRef
+        tipToInspect
       )) {
         gitlinks.add(gitlinkKey(submodule.path, submodule.sha))
       }
