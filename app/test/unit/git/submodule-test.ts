@@ -272,7 +272,7 @@ describe('git/submodule', () => {
       )
     })
 
-    it('skips an unchanged uninitialized descendant recorded by the remote parent', async t => {
+    it('skips an unchanged uninitialized descendant recorded in remote parent history', async t => {
       const testRepoPath = await setupFixtureRepository(
         t,
         'submodule-basic-setup'
@@ -282,6 +282,7 @@ describe('git/submodule', () => {
       const submoduleRemotePath = await createTempDirectory(t)
       const nestedRemotePath = await createTempDirectory(t)
       const nestedSeedPath = await createTempDirectory(t)
+      const nestedPath = path.join(submodulePath, 'nested')
 
       await exec(['init', '--bare'], submoduleRemotePath)
       await exec(
@@ -317,11 +318,18 @@ describe('git/submodule', () => {
       await exec(['commit', '-am', 'add nested submodule'], submodulePath)
       await exec(['push', 'origin', 'master'], submodulePath)
 
+      await writeFile(path.join(nestedPath, 'README.md'), 'nested updated')
+      await exec(['commit', '-am', 'update nested'], nestedPath)
+      await exec(['commit', '-am', 'update nested pointer'], submodulePath)
+      await exec(['push', 'origin', 'master'], submodulePath)
+      await exec(['reset', '--hard', 'HEAD^'], submodulePath)
+
       // Simulate a checkout whose remote-tracking ref was not refreshed after
-      // another recursive repository operation advanced the server branch.
-      // The advertised server tip still records the unchanged nested gitlink.
+      // the server branch advanced to a different nested gitlink. The
+      // unchanged candidate gitlink remains proven by the reachable history
+      // of the advertised server tip.
       await exec(
-        ['update-ref', 'refs/remotes/origin/master', 'HEAD^'],
+        ['update-ref', 'refs/remotes/origin/master', 'HEAD'],
         submodulePath
       )
       await exec(['submodule', 'deinit', '-f', 'nested'], submodulePath)

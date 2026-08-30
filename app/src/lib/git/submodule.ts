@@ -162,10 +162,11 @@ function gitlinkKey(path: string, sha: string) {
 }
 
 /**
- * Find gitlinks which are already recorded by the verified tips of configured
- * remote branches. An unchanged, uninitialized child does not need to be
- * traversed again when publishing a newer parent commit: the remote parent
- * already proves that exact gitlink was published previously.
+ * Find gitlinks which are already recorded by the reachable history of the
+ * verified tips of configured remote branches. An unchanged, uninitialized
+ * child does not need to be traversed again when publishing a newer parent
+ * commit: the remote parent history already proves that exact gitlink was
+ * published previously.
  *
  * The server-advertised branch tips are inspected directly. A matching local
  * remote-tracking ref can be used as-is; otherwise the advertised tip is
@@ -276,11 +277,32 @@ async function getGitlinksRecordedOnRemoteTips(repository: Repository) {
         continue
       }
 
-      for (const submodule of await listSubmodulesAtCommit(
-        repository,
-        tipToInspect
-      )) {
-        gitlinks.add(gitlinkKey(submodule.path, submodule.sha))
+      const { stdout: history } = await git(
+        [
+          'log',
+          '-m',
+          '--format=',
+          '--raw',
+          '-z',
+          '--root',
+          '--no-renames',
+          '--no-abbrev',
+          tipToInspect,
+          '--',
+        ],
+        repository.path,
+        'getRemoteParentGitlinkHistoryForSubmodulePush'
+      )
+      const entries = history.split('\0')
+      for (let index = 0; index + 1 < entries.length; index += 2) {
+        const metadata = entries[index]
+        const path = entries[index + 1]
+        const match = /^:[0-7]{6} 160000 [0-9a-f]{40} ([0-9a-f]{40}) [A-Z]$/.exec(
+          metadata
+        )
+        if (match !== null) {
+          gitlinks.add(gitlinkKey(path, match[1]))
+        }
       }
     }
   }
