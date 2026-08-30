@@ -272,6 +272,71 @@ describe('git/submodule', () => {
       )
     })
 
+    it('skips an unchanged uninitialized descendant recorded by the remote parent', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+      const submoduleRemotePath = await createTempDirectory(t)
+      const nestedRemotePath = await createTempDirectory(t)
+      const nestedSeedPath = await createTempDirectory(t)
+
+      await exec(['init', '--bare'], submoduleRemotePath)
+      await exec(
+        ['remote', 'set-url', 'origin', submoduleRemotePath],
+        submodulePath
+      )
+      await exec(['push', '-u', 'origin', 'master'], submodulePath)
+
+      await exec(['init', '--bare'], nestedRemotePath)
+      await exec(['init'], nestedSeedPath)
+      await exec(['config', 'user.name', 'GitHub Desktop Test'], nestedSeedPath)
+      await exec(
+        ['config', 'user.email', 'test@githubdesktop.invalid'],
+        nestedSeedPath
+      )
+      await writeFile(path.join(nestedSeedPath, 'README.md'), 'nested')
+      await exec(['add', 'README.md'], nestedSeedPath)
+      await exec(['commit', '-m', 'initial nested commit'], nestedSeedPath)
+      await exec(['remote', 'add', 'origin', nestedRemotePath], nestedSeedPath)
+      await exec(['push', '-u', 'origin', 'HEAD'], nestedSeedPath)
+
+      await exec(
+        [
+          '-c',
+          'protocol.file.allow=always',
+          'submodule',
+          'add',
+          nestedRemotePath,
+          'nested',
+        ],
+        submodulePath
+      )
+      await exec(['commit', '-am', 'add nested submodule'], submodulePath)
+      await exec(['push', 'origin', 'master'], submodulePath)
+      await exec(['submodule', 'deinit', '-f', 'nested'], submodulePath)
+
+      await writeFile(path.join(submodulePath, 'README.md'), 'parent change')
+      await exec(['commit', '-am', 'update parent only'], submodulePath)
+      await exec(['add', 'foo/submodule'], testRepoPath)
+      await exec(['commit', '-m', 'record unpublished parent'], testRepoPath)
+      const parentCommit = (
+        await exec(['rev-parse', 'HEAD'], testRepoPath)
+      ).stdout.trim()
+
+      const result = await getSubmodulesToPush(
+        repository,
+        undefined,
+        parentCommit
+      )
+      assert.deepEqual(
+        result.map(x => x.path),
+        ['foo/submodule']
+      )
+    })
+
     it('fails closed with a clear error when a recorded gitlink object is missing', async t => {
       const testRepoPath = await setupFixtureRepository(
         t,

@@ -157,6 +157,87 @@ async function isCommitAvailableOnRemote(
     .some(line => line.startsWith(`${commitSha}\t`))
 }
 
+function gitlinkKey(path: string, sha: string) {
+  return `${path}\0${sha}`
+}
+
+/**
+ * Find gitlinks which are already recorded by the verified tips of configured
+ * remote branches. An unchanged, uninitialized child does not need to be
+ * traversed again when publishing a newer parent commit: the remote parent
+ * already proves that exact gitlink was published previously.
+ *
+ * Only local remote-tracking refs which still exactly match the server's
+ * advertised branch tips are trusted. A stale or rewritten tracking ref must
+ * not weaken the push safety check.
+ */
+async function getGitlinksRecordedOnRemoteTips(repository: Repository) {
+  const gitlinks = new Set<string>()
+  const remotes = await getRemotes(repository)
+
+  for (const remote of remotes) {
+    const remoteTrackingPrefix = `refs/remotes/${remote.name}/`
+    const { stdout: localRemoteBranches } = await git(
+      [
+        'for-each-ref',
+        '--format=%(objectname) %(refname)',
+        remoteTrackingPrefix,
+      ],
+      repository.path,
+      'getLocalRemoteBranchesForSubmodulePush'
+    )
+
+    const localTips = new Map<string, { sha: string; localRef: string }>()
+    for (const line of localRemoteBranches.split('\n')) {
+      const separatorIndex = line.indexOf(' ')
+      if (separatorIndex === -1) {
+        continue
+      }
+
+      const sha = line.slice(0, separatorIndex)
+      const localRef = line.slice(separatorIndex + 1)
+      if (localRef.endsWith('/HEAD')) {
+        continue
+      }
+
+      const branchName = localRef.slice(remoteTrackingPrefix.length)
+      localTips.set(`refs/heads/${branchName}`, { sha, localRef })
+    }
+
+    if (localTips.size === 0) {
+      continue
+    }
+
+    const { stdout: advertisedBranches } = await git(
+      ['ls-remote', '--heads', remote.name, ...localTips.keys()],
+      repository.path,
+      'verifyRemoteParentBranchesForSubmodulePush',
+      {
+        env: await envForRemoteOperation(remote.url),
+        expectedErrors: AuthenticationErrors,
+      }
+    )
+
+    for (const line of advertisedBranches.split('\n')) {
+      const [advertisedSha, remoteRef] = line.split('\t')
+      const localTip =
+        remoteRef === undefined ? undefined : localTips.get(remoteRef)
+      if (localTip === undefined || localTip.sha !== advertisedSha) {
+        continue
+      }
+
+      for (const submodule of await listSubmodulesAtCommit(
+        repository,
+        localTip.localRef
+      )) {
+        gitlinks.add(gitlinkKey(submodule.path, submodule.sha))
+      }
+    }
+  }
+
+  return gitlinks
+}
+
 /**
  * Update submodules after a git operation.
  *
@@ -383,6 +464,7 @@ async function collectSubmodulesToPush(
     commitSha === undefined
       ? await listSubmodules(repository)
       : await listSubmodulesAtCommit(repository, commitSha)
+  let remoteTipGitlinks: ReadonlySet<string> | undefined
 
   for (const submodule of submodules) {
     if (candidatePaths !== undefined && !candidatePaths.has(submodule.path)) {
@@ -392,6 +474,11 @@ async function collectSubmodulesToPush(
     const submoduleRepositoryPath = join(repository.path, submodule.path)
     if (!(await pathExists(join(submoduleRepositoryPath, '.git')))) {
       if (commitSha !== undefined) {
+        remoteTipGitlinks ??= await getGitlinksRecordedOnRemoteTips(repository)
+        if (remoteTipGitlinks.has(gitlinkKey(submodule.path, submodule.sha))) {
+          continue
+        }
+
         throw new Error(
           `Unable to verify submodule "${
             parentPath ? `${parentPath}/${submodule.path}` : submodule.path
@@ -430,17 +517,6 @@ async function collectSubmodulesToPush(
         )
       }
     }
-
-    // Push descendants first so every commit referenced by a parent submodule
-    // is available remotely before that parent's branch is pushed.
-    await collectSubmodulesToPush(
-      submoduleRepository,
-      displayPath,
-      undefined,
-      visitedRepositoryPaths,
-      pushableSubmodules,
-      submodule.sha
-    )
 
     const status = await getStatus(submoduleRepository)
     if (status === null || status.currentTip === undefined) {
@@ -500,6 +576,19 @@ async function collectSubmodulesToPush(
     ) {
       continue
     }
+
+    // The referenced parent commit is not available remotely, so publish any
+    // unavailable descendants first. Already-published parent commits do not
+    // need their complete (and potentially uninitialized) child graph scanned
+    // again.
+    await collectSubmodulesToPush(
+      submoduleRepository,
+      displayPath,
+      undefined,
+      visitedRepositoryPaths,
+      pushableSubmodules,
+      referencedCommit
+    )
 
     if (
       status.currentBranch === undefined ||
