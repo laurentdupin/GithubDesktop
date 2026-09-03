@@ -54,5 +54,9 @@
       color: var(--text-secondary-color);
       padding-left: calc(var(--spacing) + var(--submodule-indent, 0px));
     }
+
+    &.historical-submodule-change {
+      padding-left: calc(var(--spacing) + var(--submodule-indent, 0px));
+    }
   }
 }

@@ -65,6 +65,7 @@ import {
   DiffSelection,
   DiffSelectionType,
   DiffType,
+  IDiff,
   ImageDiffType,
   ITextDiff,
 } from '../../models/diff'
@@ -198,6 +199,7 @@ import {
   getAuthorIdentity,
   getChangedFiles,
   getCommitDiff,
+  getCommitDiffBetween,
   getMergeBase,
   getRemotes,
   getWorkingDirectoryDiff,
@@ -249,6 +251,8 @@ import {
   HookProgress,
   SubmodulePushContext,
   expandWorkingDirectoryWithSubmoduleChanges,
+  expandChangesetWithSubmoduleChanges,
+  toSubmoduleCommittedChange,
   getSubmoduleRepositoryWorkingDirectory,
   getSubmodulesToPush,
   getShelves,
@@ -2111,7 +2115,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
     }
 
     const gitStore = this.gitStoreCache.get(repository)
-    const changesetData = await gitStore.performFailableOperation(() =>
+    const baseChangesetData = await gitStore.performFailableOperation(() =>
       currentSHAs.length > 1
         ? getCommitRangeChangedFiles(
             repository,
@@ -2119,9 +2123,14 @@ export class AppStore extends TypedBaseStore<IAppState> {
           )
         : getChangedFiles(repository, currentSHAs[0])
     )
-    if (!changesetData) {
+    if (!baseChangesetData) {
       return
     }
+
+    const changesetData = await expandChangesetWithSubmoduleChanges(
+      repository,
+      baseChangesetData
+    )
 
     // The selection could have changed between when we started loading the
     // changed files and we finished. We might wanna store the changed files per
@@ -2190,20 +2199,32 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return
     }
 
-    const diff =
-      shas.length > 1
-        ? await getCommitRangeDiff(
-            repository,
-            file,
-            this.orderShasByHistory(repository, shas),
-            this.hideWhitespaceInHistoryDiff
-          )
-        : await getCommitDiff(
-            repository,
-            file,
-            shas[0],
-            this.hideWhitespaceInHistoryDiff
-          )
+    let diff: IDiff
+    if (file.submoduleChange !== null) {
+      const submoduleChange = toSubmoduleCommittedChange(file)
+      diff = await getCommitDiffBetween(
+        submoduleChange.repository,
+        submoduleChange.file,
+        file.parentCommitish,
+        file.commitish,
+        this.hideWhitespaceInHistoryDiff
+      )
+    } else {
+      diff =
+        shas.length > 1
+          ? await getCommitRangeDiff(
+              repository,
+              file,
+              this.orderShasByHistory(repository, shas),
+              this.hideWhitespaceInHistoryDiff
+            )
+          : await getCommitDiff(
+              repository,
+              file,
+              shas[0],
+              this.hideWhitespaceInHistoryDiff
+            )
+    }
 
     const stateAfterLoad = this.repositoryStateCache.get(repository)
     const { shas: shasAfter } = stateAfterLoad.commitSelection

@@ -149,6 +149,44 @@ export async function getCommitDiff(
   return buildDiff(stdout, repository, file, commitish, commitish)
 }
 
+/** Render a file diff between two exact tree-ish values. */
+export async function getCommitDiffBetween(
+  repository: Repository,
+  file: FileChange,
+  oldCommitish: string,
+  newCommitish: string,
+  hideWhitespaceInDiff: boolean = false
+): Promise<IDiff> {
+  const args = [
+    'diff',
+    oldCommitish,
+    newCommitish,
+    ...(hideWhitespaceInDiff ? ['-w'] : []),
+    '--patch-with-raw',
+    '--format=',
+    '-z',
+    '--no-color',
+    '--',
+    ensureRelativePath(file.path),
+  ]
+
+  if (
+    file.status.kind === AppFileStatusKind.Renamed ||
+    file.status.kind === AppFileStatusKind.Copied
+  ) {
+    args.push(ensureRelativePath(file.status.oldPath))
+  }
+
+  const { stdout } = await git(
+    args,
+    repository.path,
+    'getCommitDiffBetween',
+    { encoding: 'buffer' }
+  )
+
+  return buildDiff(stdout, repository, file, newCommitish, oldCommitish)
+}
+
 /**
  * Render the diff between two branches with --merge-base for a file
  * (Show what would be the result of merge)
@@ -672,7 +710,9 @@ async function getImageDiff(
       previous = await getBlobImage(
         repository,
         getOldPathOrDefault(file),
-        `${oldestCommitish}^`
+        file instanceof CommittedFileChange
+          ? file.parentCommitish
+          : `${oldestCommitish}^`
       )
     }
 

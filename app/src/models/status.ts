@@ -142,6 +142,18 @@ export type SubmoduleChange = {
   readonly oldPathInSubmodule?: string
 }
 
+/** Metadata for a historical file change owned by a submodule repository. */
+export type CommittedSubmoduleChange = {
+  /** Absolute path to the repository which owns this file. */
+  readonly repositoryPath: string
+  /** Number of submodule boundaries from the root history repository. */
+  readonly depth: number
+  /** Path to the file relative to its owning submodule repository. */
+  readonly pathInSubmodule: string
+  /** Original relative path for renamed or copied files. */
+  readonly oldPathInSubmodule?: string
+}
+
 /** The porcelain status for an ordinary changed entry */
 type OrdinaryEntry = {
   readonly kind: 'ordinary'
@@ -375,7 +387,8 @@ export class CommittedFileChange extends FileChange {
     path: string,
     status: AppFileStatus,
     public readonly commitish: string,
-    public readonly parentCommitish: string
+    public readonly parentCommitish: string,
+    public readonly submoduleChange: CommittedSubmoduleChange | null = null
   ) {
     super(path, status)
 

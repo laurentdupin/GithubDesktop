@@ -17,6 +17,7 @@ export class CommittedFileItem extends React.Component<ICommittedFileItemProps> 
   public render() {
     const { file, focused } = this.props
     const { status } = file
+    const depth = file.submoduleChange?.depth ?? 0
     const fileStatus = mapStatus(status)
 
     const listItemPadding = 10 * 2
@@ -26,10 +27,18 @@ export class CommittedFileItem extends React.Component<ICommittedFileItemProps> 
       this.props.availableWidth -
       listItemPadding -
       filePathPadding -
-      statusWidth
+      statusWidth -
+      depth * 14
 
     return (
-      <div className="file">
+      <div
+        className={`file ${depth > 0 ? 'historical-submodule-change' : ''}`.trim()}
+        style={
+          {
+            '--submodule-indent': `${depth * 14}px`,
+          } as React.CSSProperties
+        }
+      >
         <PathLabel
           path={file.path}
           status={file.status}
