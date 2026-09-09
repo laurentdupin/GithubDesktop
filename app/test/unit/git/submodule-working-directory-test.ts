@@ -11,10 +11,14 @@ import {
   expandWorkingDirectoryWithSubmoduleChanges,
   getStatus,
   getSubmoduleRepositoryWorkingDirectory,
+  groupChangesByOwningRepository,
   toSubmoduleRepositoryChange,
 } from '../../../src/lib/git'
 import { setupFixtureRepository } from '../../helpers/repositories'
 import { createTempDirectory } from '../../helpers/temp'
+import { shell } from '../../helpers/test-app-shell'
+import { TestStatsStore } from '../../helpers/test-stats-store'
+import { GitStore } from '../../../src/lib/stores'
 
 describe('git/submodule-working-directory', () => {
   it('returns no submodule working directory when the submodule is clean', async t => {
@@ -128,5 +132,46 @@ describe('git/submodule-working-directory', () => {
     const repositoryChange = toSubmoduleRepositoryChange(nestedFile)
     assert.equal(repositoryChange.repository.path, nestedPath)
     assert.equal(repositoryChange.file.path, 'nested-change.txt')
+
+    const nestedSubmoduleChange = toSubmoduleRepositoryChange(nestedSubmodule)
+    assert.equal(nestedSubmoduleChange.repository.path, submodulePath)
+    assert.equal(nestedSubmoduleChange.file.path, 'nested')
+
+    const changesByRepository = groupChangesByOwningRepository(repository, [
+      expanded[0],
+      nestedSubmodule,
+      nestedFile,
+    ])
+    assert.deepEqual(
+      changesByRepository.map(group => ({
+        repositoryPath: group.repository.path,
+        filePaths: group.files.map(file => file.path),
+      })),
+      [
+        { repositoryPath: repoPath, filePaths: ['foo/submodule'] },
+        { repositoryPath: submodulePath, filePaths: ['nested'] },
+        { repositoryPath: nestedPath, filePaths: ['nested-change.txt'] },
+      ]
+    )
+
+    const nestedDiscardGroups = groupChangesByOwningRepository(repository, [
+      nestedSubmodule,
+      nestedFile,
+    ])
+
+    for (const group of nestedDiscardGroups) {
+      const gitStore = new GitStore(
+        group.repository,
+        shell,
+        new TestStatsStore()
+      )
+      await gitStore.discardChanges(group.files)
+    }
+
+    const nestedStatus = await getStatus(
+      new Repository(nestedPath, -1, null, false)
+    )
+    assert(nestedStatus !== null)
+    assert.equal(nestedStatus.workingDirectory.files.length, 0)
   })
 })

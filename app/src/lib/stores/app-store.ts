@@ -253,6 +253,7 @@ import {
   expandWorkingDirectoryWithSubmoduleChanges,
   expandChangesetWithSubmoduleChanges,
   toSubmoduleCommittedChange,
+  groupChangesByOwningRepository,
   getSubmoduleRepositoryWorkingDirectory,
   getSubmodulesToPush,
   getShelves,
@@ -6528,16 +6529,22 @@ export class AppStore extends TypedBaseStore<IAppState> {
     files: ReadonlyArray<WorkingDirectoryFileChange>,
     moveToTrash: boolean = true
   ) {
-    const gitStore = this.gitStoreCache.get(repository)
-
     const { askForConfirmationOnDiscardChangesPermanently } = this.getState()
+    const changesByRepository = groupChangesByOwningRepository(
+      repository,
+      files
+    )
 
     try {
-      await gitStore.discardChanges(
-        files,
-        moveToTrash,
-        askForConfirmationOnDiscardChangesPermanently
-      )
+      for (const changes of changesByRepository) {
+        const gitStore = this.gitStoreCache.get(changes.repository)
+
+        await gitStore.discardChanges(
+          changes.files,
+          moveToTrash,
+          askForConfirmationOnDiscardChangesPermanently
+        )
+      }
     } catch (error) {
       if (!(error instanceof DiscardChangesError)) {
         log.error('Failed discarding changes', error)

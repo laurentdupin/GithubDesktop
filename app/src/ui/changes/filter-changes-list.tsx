@@ -771,8 +771,20 @@ export class FilterChangesList extends React.Component<
       file.status.submoduleStatus === undefined
         ? submoduleChange.repository.path
         : Path.join(submoduleChange.repository.path, submoduleChange.file.path)
+    const discardPaths = this.getDiscardPaths(file)
+    const discardLabel =
+      file.status.submoduleStatus === undefined
+        ? this.getDiscardChangesMenuItemLabel(discardPaths)
+        : this.props.askForConfirmationOnDiscardChanges
+        ? 'Discard all changes in this submodule…'
+        : 'Discard all changes in this submodule'
 
     return [
+      {
+        label: discardLabel,
+        action: () => this.onDiscardChanges(discardPaths),
+      },
+      { type: 'separator' },
       this.getCopyPathMenuItem(file),
       this.getCopyRelativePathMenuItem(file),
       { type: 'separator' },
@@ -835,8 +847,22 @@ export class FilterChangesList extends React.Component<
         ? `Shelve ${paths.length} Selected Files...`
         : `Shelve ${paths.length} selected files...`
 
+    const discardPaths =
+      paths.length === 1 && status.submoduleStatus !== undefined
+        ? this.getDiscardPaths(file)
+        : paths
+    const discardMenuItem =
+      paths.length === 1 && status.submoduleStatus !== undefined
+        ? {
+            ...this.getDiscardChangesMenuItem(discardPaths),
+            label: this.props.askForConfirmationOnDiscardChanges
+              ? 'Discard all changes in this submodule…'
+              : 'Discard all changes in this submodule',
+          }
+        : this.getDiscardChangesMenuItem(discardPaths)
+
     const items: IMenuItem[] = [
-      this.getDiscardChangesMenuItem(paths),
+      discardMenuItem,
       {
         label: shelveMenuLabel,
         action: () =>
@@ -952,6 +978,26 @@ export class FilterChangesList extends React.Component<
     )
 
     return items
+  }
+
+  /** Includes recursively displayed files so untracked descendants are removed. */
+  private getDiscardPaths(
+    file: WorkingDirectoryFileChange
+  ): ReadonlyArray<string> {
+    if (file.status.submoduleStatus === undefined) {
+      return [file.path]
+    }
+
+    const descendantPrefix = `${file.path}/`
+
+    return this.props.workingDirectory.files
+      .filter(
+        candidate =>
+          candidate.path === file.path ||
+          (isSyntheticSubmoduleChange(candidate) &&
+            candidate.path.startsWith(descendantPrefix))
+      )
+      .map(candidate => candidate.path)
   }
 
   private getRebaseContextMenu(

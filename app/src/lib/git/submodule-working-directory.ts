@@ -212,3 +212,42 @@ export function toSubmoduleRepositoryChange(
     ),
   }
 }
+
+export interface IRepositoryChanges {
+  readonly repository: Repository
+  readonly files: ReadonlyArray<WorkingDirectoryFileChange>
+}
+
+/**
+ * Groups displayed changes by the repository that owns their real paths.
+ * Recursive submodule changes use parent-relative display paths, which aren't
+ * valid inputs to Git operations in either the root or nested repository.
+ */
+export function groupChangesByOwningRepository(
+  repository: Repository,
+  files: ReadonlyArray<WorkingDirectoryFileChange>
+): ReadonlyArray<IRepositoryChanges> {
+  const groups = new Map<
+    string,
+    { repository: Repository; files: WorkingDirectoryFileChange[] }
+  >()
+
+  for (const file of files) {
+    const repositoryChange = isSyntheticSubmoduleChange(file)
+      ? toSubmoduleRepositoryChange(file)
+      : { repository, file }
+    const key = repositoryChange.repository.hash
+    const group = groups.get(key)
+
+    if (group === undefined) {
+      groups.set(key, {
+        repository: repositoryChange.repository,
+        files: [repositoryChange.file],
+      })
+    } else {
+      group.files.push(repositoryChange.file)
+    }
+  }
+
+  return [...groups.values()]
+}
