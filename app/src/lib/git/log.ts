@@ -244,6 +244,31 @@ export async function getChangedFiles(
   return parseRawLogWithNumstat(stdout, sha, `${sha}^`)
 }
 
+/** Get files changed between two exact tree-ish values. */
+export async function getChangedFilesBetween(
+  repository: Repository,
+  oldCommitish: string,
+  newCommitish: string
+): Promise<IChangesetData> {
+  const { stdout } = await git(
+    [
+      'diff',
+      oldCommitish,
+      newCommitish,
+      '-C',
+      '-M',
+      '--raw',
+      '--numstat',
+      '-z',
+      '--',
+    ],
+    repository.path,
+    'getChangedFilesBetween'
+  )
+
+  return parseRawLogWithNumstat(stdout, newCommitish, oldCommitish)
+}
+
 /**
  * Parses output of diff flags -z --raw --numstat.
  *

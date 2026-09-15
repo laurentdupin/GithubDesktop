@@ -52,10 +52,11 @@
 
     &.synthetic-submodule-change {
       color: var(--text-secondary-color);
+      padding-left: calc(var(--spacing) + var(--submodule-indent, 0px));
+    }
 
-      .path-label-component {
-        margin-left: calc(var(--spacing) + 4px);
-      }
+    &.historical-submodule-change {
+      padding-left: calc(var(--spacing) + var(--submodule-indent, 0px));
     }
   }
 }

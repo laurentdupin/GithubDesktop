@@ -18,9 +18,6 @@ import {
   isRepositoryWithGitHubRepository,
   Repository,
 } from '../../models/repository'
-import {
-  getTrackSubmoduleWorkingTreeChanges,
-} from '../../models/workflow-preferences'
 import { Account } from '../../models/account'
 import { Author, UnknownAuthor } from '../../models/author'
 import { Checkbox, CheckboxValue } from '../lib/checkbox'
@@ -81,12 +78,17 @@ import {
   applyFilters,
 } from './filter-changes-logic'
 import { ChangesListFilterOptions } from './changes-list-filter-options'
-import { HookProgress } from '../../lib/git'
+import {
+  applyDiffTree,
+  DiffTreeAgentInstructions,
+  getWorkingDirectoryDiffTree,
+  HookProgress,
+  toSubmoduleRepositoryChange,
+} from '../../lib/git'
 import { formatNumber } from '../../lib/format-number'
 import { IShelf, IShelfActionProgress } from '../../models/shelf'
 import { ShelvesSection } from '../shelves/shelves-section'
 import { getShelvesSectionState } from '../shelves/shelves-state'
-import { toSubmoduleRepositoryChange } from '../../lib/git'
 
 export interface IChangesListItem extends IFilterListItem {
   readonly id: string
@@ -99,14 +101,7 @@ const StashIcon: OcticonSymbolVariant = {
   w: 16,
   h: 16,
   p: [
-    'M10.5 1.286h-9a.214.214 0 0 0-.214.214v9a.214.214 0 0 0 .214.214h9a.214.214 0 0 0 ' +
-      '.214-.214v-9a.214.214 0 0 0-.214-.214zM1.5 0h9A1.5 1.5 0 0 1 12 1.5v9a1.5 1.5 0 0 1-1.5 ' +
-      '1.5h-9A1.5 1.5 0 0 1 0 10.5v-9A1.5 1.5 0 0 1 1.5 0zm5.712 7.212a1.714 1.714 0 1 ' +
-      '1-2.424-2.424 1.714 1.714 0 0 1 2.424 2.424zM2.015 12.71c.102.729.728 1.29 1.485 ' +
-      '1.29h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.29-1.485v1.442a.216.216 0 0 1 ' +
-      '.004.043v9a.214.214 0 0 1-.214.214h-9a.216.216 0 0 1-.043-.004H2.015zm2 2c.102.729.728 ' +
-      '1.29 1.485 1.29h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.29-1.485v1.442a.216.216 0 0 1 ' +
-      '.004.043v9a.214.214 0 0 1-.214.214h-9a.216.216 0 0 1-.043-.004H4.015z',
+    'M10.5 1.286h-9a.214.214 0 0 0-.214.214v9a.214.214 0 0 0 .214-.214v-9a.214.214 0 0 0-.214-.214zM1.5 0h9A1.5 1.5 0 0 1 12 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 0 10.5v-9A1.5 1.5 0 0 1 1.5 0zm5.712 7.212a1.714 1.714 0 1 1-2.424-2.424 1.714 1.714 0 0 1 2.424 2.424zM2.015 12.71c.102.729.728 1.29 1.485 1.29h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.29-1.485v1.442a.216.216 0 0 1 .004.043v9a.214.214 0 0 1-.214.214h-9a.216.216 0 0 1-.043-.004H2.015zm2 2c.102.729.728 1.29 1.485 1.29h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.29-1.485v1.442a.216.216 0 0 1 .004.043v9a.214.214 0 0 1-.214.214h-9a.216.216 0 0 1-.043-.004H4.015z',
   ],
 }
 
@@ -438,8 +433,8 @@ export class FilterChangesList extends React.Component<
     const include = event.currentTarget.checked
     const filteredItemPaths = this.getCommitCandidateFiles(
       Array.from(
-      this.state.filteredItems,
-      ([, v]) => v.change
+        this.state.filteredItems,
+        ([, v]) => v.change
       )
     )
     this.props.onIncludeChanged(filteredItemPaths, include)
@@ -490,6 +485,9 @@ export class FilterChangesList extends React.Component<
         className={
           syntheticSubmoduleChange ? 'synthetic-submodule-change' : undefined
         }
+        indentationLevel={
+          syntheticSubmoduleChange ? file.submoduleChange.depth : 0
+        }
         checkboxTooltip={checkboxTooltip}
         focused={this.state.focusedRow === changeListItem.id}
         matches={matches}
@@ -501,10 +499,7 @@ export class FilterChangesList extends React.Component<
     const discardableFiles = this.getCommitCandidateFiles(
       this.props.workingDirectory.files
     )
-    this.props.onDiscardChangesFromFiles(
-      discardableFiles,
-      true
-    )
+    this.props.onDiscardChangesFromFiles(discardableFiles, true)
   }
 
   private onStashChanges = () => {
@@ -532,8 +527,6 @@ export class FilterChangesList extends React.Component<
       })
 
       if (modifiedFiles.length > 0) {
-        // DiscardAllChanges can also be used for discarding several selected changes.
-        // Therefore, we update the pop up to reflect whether or not it is "all" changes.
         const discardingAllChanges =
           modifiedFiles.length === workingDirectory.files.length
 
@@ -561,7 +554,6 @@ export class FilterChangesList extends React.Component<
   private onContextMenu = (event: React.MouseEvent<any>) => {
     event.preventDefault()
 
-    // need to preserve the working directory state while dealing with conflicts
     if (this.props.rebaseConflictState !== null || this.props.isCommitting) {
       return
     }
@@ -609,6 +601,20 @@ export class FilterChangesList extends React.Component<
         action: this.onStashChanges,
         enabled: hasLocalChanges && this.props.branch !== null && !hasConflicts,
       },
+      { type: 'separator' },
+      {
+        label: 'Copy Diff Tree',
+        action: this.onCopyDiffTree,
+        enabled: hasLocalChanges,
+      },
+      {
+        label: 'Load Diff Tree',
+        action: this.onLoadDiffTree,
+      },
+      {
+        label: 'Copy Agent Instructions',
+        action: this.onCopyDiffTreeAgentInstructions,
+      },
     ]
 
     showContextualMenu(items)
@@ -616,85 +622,70 @@ export class FilterChangesList extends React.Component<
 
   private getDiscardChangesMenuItem = (
     paths: ReadonlyArray<string>
-  ): IMenuItem => {
-    return {
-      label: this.getDiscardChangesMenuItemLabel(paths),
-      action: () => this.onDiscardChanges(paths),
-    }
-  }
+  ): IMenuItem => ({
+    label: this.getDiscardChangesMenuItemLabel(paths),
+    action: () => this.onDiscardChanges(paths),
+  })
 
   private getCopyPathMenuItem = (
     file: WorkingDirectoryFileChange
-  ): IMenuItem => {
-    return {
-      label: CopyFilePathLabel,
-      action: () => {
-        const fullPath = Path.join(this.props.repository.path, file.path)
-        clipboard.writeText(fullPath)
-      },
-    }
-  }
+  ): IMenuItem => ({
+    label: CopyFilePathLabel,
+    action: () => {
+      const fullPath = Path.join(this.props.repository.path, file.path)
+      clipboard.writeText(fullPath)
+    },
+  })
 
   private getCopyRelativePathMenuItem = (
     file: WorkingDirectoryFileChange
-  ): IMenuItem => {
-    return {
-      label: CopyRelativeFilePathLabel,
-      action: () => clipboard.writeText(Path.normalize(file.path)),
-    }
-  }
+  ): IMenuItem => ({
+    label: CopyRelativeFilePathLabel,
+    action: () => clipboard.writeText(Path.normalize(file.path)),
+  })
 
   private getCopySelectedPathsMenuItem = (
     files: WorkingDirectoryFileChange[]
-  ): IMenuItem => {
-    return {
-      label: CopySelectedPathsLabel,
-      action: () => {
-        const fullPaths = files.map(file =>
-          Path.join(this.props.repository.path, file.path)
-        )
-        clipboard.writeText(fullPaths.join(EOL))
-      },
-    }
-  }
+  ): IMenuItem => ({
+    label: CopySelectedPathsLabel,
+    action: () => {
+      const fullPaths = files.map(file =>
+        Path.join(this.props.repository.path, file.path)
+      )
+      clipboard.writeText(fullPaths.join(EOL))
+    },
+  })
 
   private getCopySelectedRelativePathsMenuItem = (
     files: WorkingDirectoryFileChange[]
-  ): IMenuItem => {
-    return {
-      label: CopySelectedRelativePathsLabel,
-      action: () => {
-        const paths = files.map(file => Path.normalize(file.path))
-        clipboard.writeText(paths.join(EOL))
-      },
-    }
-  }
+  ): IMenuItem => ({
+    label: CopySelectedRelativePathsLabel,
+    action: () => {
+      const paths = files.map(file => Path.normalize(file.path))
+      clipboard.writeText(paths.join(EOL))
+    },
+  })
 
   private getRevealInFileManagerMenuItem = (
     file: WorkingDirectoryFileChange
-  ): IMenuItem => {
-    return {
-      label: RevealInFileManagerLabel,
-      action: () => revealInFileManager(this.props.repository, file.path),
-      enabled: file.status.kind !== AppFileStatusKind.Deleted,
-    }
-  }
+  ): IMenuItem => ({
+    label: RevealInFileManagerLabel,
+    action: () => revealInFileManager(this.props.repository, file.path),
+    enabled: file.status.kind !== AppFileStatusKind.Deleted,
+  })
 
   private getOpenInExternalEditorMenuItem = (
     file: WorkingDirectoryFileChange,
     enabled: boolean
   ): IMenuItem => {
     const { externalEditorLabel } = this.props
-
     const openInExternalEditor = externalEditorLabel
       ? `Open in ${externalEditorLabel}`
       : DefaultEditorLabel
 
     return {
       label: openInExternalEditor,
-      action: () => {
-        this.props.onOpenItemInExternalEditor(file.path)
-      },
+      action: () => this.props.onOpenItemInExternalEditor(file.path),
       enabled,
     }
   }
@@ -702,24 +693,22 @@ export class FilterChangesList extends React.Component<
   private getAddSubmoduleRepositoryMenuItem = (
     submoduleRepositoryPath: string,
     enabled: boolean
-  ): IMenuItem => {
-    return {
-      label: __DARWIN__
-        ? 'Add Submodule as Repository'
-        : 'Add submodule as repository',
-      action: async () => {
-        const repositories = await this.props.dispatcher.addRepositories([
-          submoduleRepositoryPath,
-        ])
-        const repository = repositories[0]
+  ): IMenuItem => ({
+    label: __DARWIN__
+      ? 'Add Submodule as Repository'
+      : 'Add submodule as repository',
+    action: async () => {
+      const repositories = await this.props.dispatcher.addRepositories([
+        submoduleRepositoryPath,
+      ])
+      const repository = repositories[0]
 
-        if (repository !== undefined) {
-          await this.props.dispatcher.selectRepository(repository)
-        }
-      },
-      enabled,
-    }
-  }
+      if (repository !== undefined) {
+        await this.props.dispatcher.selectRepository(repository)
+      }
+    },
+    enabled,
+  })
 
   private getIgnoreFileMenuItems(
     path: string,
@@ -737,18 +726,13 @@ export class FilterChangesList extends React.Component<
       enabled,
     })
 
-    // Even on Windows, the path separator is '/' for git operations so cannot
-    // use Path.sep
     const pathComponents = path.split('/').slice(0, -1)
     if (pathComponents.length > 0) {
       const submenu = pathComponents.map((_, index) => {
         const label = `/${pathComponents
           .slice(0, pathComponents.length - index)
           .join('/')}`
-        return {
-          label,
-          action: () => onIgnoreFile(label),
-        }
+        return { label, action: () => onIgnoreFile(label) }
       })
 
       items.push({
@@ -783,8 +767,24 @@ export class FilterChangesList extends React.Component<
       this.props.dispatcher.appendIgnoreFile(submoduleChange.repository, pattern)
     const onIgnorePattern = (pattern: string | string[]) =>
       this.props.dispatcher.appendIgnoreRule(submoduleChange.repository, pattern)
+    const repositoryPath =
+      file.status.submoduleStatus === undefined
+        ? submoduleChange.repository.path
+        : Path.join(submoduleChange.repository.path, submoduleChange.file.path)
+    const discardPaths = this.getDiscardPaths(file)
+    const discardLabel =
+      file.status.submoduleStatus === undefined
+        ? this.getDiscardChangesMenuItemLabel(discardPaths)
+        : this.props.askForConfirmationOnDiscardChanges
+        ? 'Discard all changes in this submodule…'
+        : 'Discard all changes in this submodule'
 
     return [
+      {
+        label: discardLabel,
+        action: () => this.onDiscardChanges(discardPaths),
+      },
+      { type: 'separator' },
       this.getCopyPathMenuItem(file),
       this.getCopyRelativePathMenuItem(file),
       { type: 'separator' },
@@ -795,10 +795,7 @@ export class FilterChangesList extends React.Component<
       ),
       { type: 'separator' },
       this.getRevealInFileManagerMenuItem(file),
-      this.getAddSubmoduleRepositoryMenuItem(
-        submoduleChange.repository.path,
-        enabled
-      ),
+      this.getAddSubmoduleRepositoryMenuItem(repositoryPath, enabled),
       this.getOpenInExternalEditorMenuItem(file, enabled),
       {
         label: OpenWithDefaultProgramLabel,
@@ -816,12 +813,9 @@ export class FilterChangesList extends React.Component<
     }
 
     const { id, path, status } = file
-
     const extension = Path.extname(path)
     const isSafeExtension = isSafeFileExtension(extension)
-
     const { workingDirectory, selectedFileIDs } = this.props
-
     const selectedFiles = new Array<WorkingDirectoryFileChange>()
     const paths = new Array<string>()
     const extensions = new Set<string>()
@@ -831,7 +825,6 @@ export class FilterChangesList extends React.Component<
       if (newFile && !isSyntheticSubmoduleChange(newFile)) {
         selectedFiles.push(newFile)
         paths.push(newFile.path)
-
         const extension = Path.extname(newFile.path)
         if (extension.length) {
           extensions.add(extension)
@@ -840,12 +833,8 @@ export class FilterChangesList extends React.Component<
     }
 
     if (selectedFileIDs.includes(id)) {
-      // user has selected a file inside an existing selection
-      // -> context menu entries should be applied to all selected files
       selectedFileIDs.forEach(addItemToArray)
     } else {
-      // this is outside their previous selection
-      // -> context menu entries should be applied to just this file
       addItemToArray(id)
     }
 
@@ -858,8 +847,22 @@ export class FilterChangesList extends React.Component<
         ? `Shelve ${paths.length} Selected Files...`
         : `Shelve ${paths.length} selected files...`
 
+    const discardPaths =
+      paths.length === 1 && status.submoduleStatus !== undefined
+        ? this.getDiscardPaths(file)
+        : paths
+    const discardMenuItem =
+      paths.length === 1 && status.submoduleStatus !== undefined
+        ? {
+            ...this.getDiscardChangesMenuItem(discardPaths),
+            label: this.props.askForConfirmationOnDiscardChanges
+              ? 'Discard all changes in this submodule…'
+              : 'Discard all changes in this submodule',
+          }
+        : this.getDiscardChangesMenuItem(discardPaths)
+
     const items: IMenuItem[] = [
-      this.getDiscardChangesMenuItem(paths),
+      discardMenuItem,
       {
         label: shelveMenuLabel,
         action: () =>
@@ -873,6 +876,7 @@ export class FilterChangesList extends React.Component<
       },
       { type: 'separator' },
     ]
+
     if (paths.length === 1) {
       const enabled = Path.basename(path) !== GitIgnoreFileName
       items.push({
@@ -883,18 +887,13 @@ export class FilterChangesList extends React.Component<
         enabled,
       })
 
-      // Even on Windows, the path separator is '/' for git operations so cannot
-      // use Path.sep
       const pathComponents = path.split('/').slice(0, -1)
       if (pathComponents.length > 0) {
         const submenu = pathComponents.map((_, index) => {
           const label = `/${pathComponents
             .slice(0, pathComponents.length - index)
             .join('/')}`
-          return {
-            label,
-            action: () => this.props.onIgnoreFile(label),
-          }
+          return { label, action: () => this.props.onIgnoreFile(label) }
         })
 
         items.push({
@@ -911,18 +910,14 @@ export class FilterChangesList extends React.Component<
           ? `Ignore ${paths.length} Selected Files (Add to .gitignore)`
           : `Ignore ${paths.length} selected files (add to .gitignore)`,
         action: () => {
-          // Filter out any .gitignores that happens to be selected, ignoring
-          // those doesn't make sense.
           this.props.onIgnoreFile(
             paths.filter(path => Path.basename(path) !== GitIgnoreFileName)
           )
         },
-        // Enable this action as long as there's something selected which isn't
-        // a .gitignore file.
         enabled: paths.some(path => Path.basename(path) !== GitIgnoreFileName),
       })
     }
-    // Five menu items should be enough for everyone
+
     Array.from(extensions)
       .slice(0, 5)
       .forEach(extension => {
@@ -938,17 +933,13 @@ export class FilterChangesList extends React.Component<
       items.push(
         { type: 'separator' },
         {
-          label: __DARWIN__
-            ? 'Include Selected Files'
-            : 'Include selected files',
+          label: __DARWIN__ ? 'Include Selected Files' : 'Include selected files',
           action: () => {
             selectedFiles.map(file => this.props.onIncludeChanged(file, true))
           },
         },
         {
-          label: __DARWIN__
-            ? 'Exclude Selected Files'
-            : 'Exclude selected files',
+          label: __DARWIN__ ? 'Exclude Selected Files' : 'Exclude selected files',
           action: () => {
             selectedFiles.map(file => this.props.onIncludeChanged(file, false))
           },
@@ -989,6 +980,26 @@ export class FilterChangesList extends React.Component<
     return items
   }
 
+  /** Includes recursively displayed files so untracked descendants are removed. */
+  private getDiscardPaths(
+    file: WorkingDirectoryFileChange
+  ): ReadonlyArray<string> {
+    if (file.status.submoduleStatus === undefined) {
+      return [file.path]
+    }
+
+    const descendantPrefix = `${file.path}/`
+
+    return this.props.workingDirectory.files
+      .filter(
+        candidate =>
+          candidate.path === file.path ||
+          (isSyntheticSubmoduleChange(candidate) &&
+            candidate.path.startsWith(descendantPrefix))
+      )
+      .map(candidate => candidate.path)
+  }
+
   private getRebaseContextMenu(
     file: WorkingDirectoryFileChange
   ): ReadonlyArray<IMenuItem> {
@@ -997,10 +1008,8 @@ export class FilterChangesList extends React.Component<
     }
 
     const { path, status } = file
-
     const extension = Path.extname(path)
     const isSafeExtension = isSafeFileExtension(extension)
-
     const items = new Array<IMenuItem>()
 
     if (file.status.kind === AppFileStatusKind.Untracked) {
@@ -1074,10 +1083,6 @@ export class FilterChangesList extends React.Component<
       case AppFileStatusKind.Deleted:
         return `Delete ${fileName}`
       default:
-        // TODO:
-        // this doesn't feel like a great message for AppFileStatus.Copied or
-        // AppFileStatus.Renamed but without more insight (and whether this
-        // affects other parts of the flow) we can just default to this for now
         return `Update ${fileName}`
     }
   }
@@ -1105,9 +1110,7 @@ export class FilterChangesList extends React.Component<
     if (rebaseConflictState !== null) {
       const hasUntrackedChanges = this.getCommitCandidateFiles(
         workingDirectory.files
-      ).some(
-        f => f.status.kind === AppFileStatusKind.Untracked
-      )
+      ).some(f => f.status.kind === AppFileStatusKind.Untracked)
 
       return (
         <ContinueRebase
@@ -1125,27 +1128,14 @@ export class FilterChangesList extends React.Component<
       workingDirectory.files
     )
     const fileCount = parentRepositoryFiles.length
-
-    // Files selected to commit (to be committed) (not selected to see in diff)
     const filesSelected = this.getFilesSelectedForCommit(workingDirectory.files)
-
     const anyFilesSelected = filesSelected.length > 0
-    const autoCommitSubmoduleCount =
-      this.getAutoCommittedSubmoduleCount(filesSelected)
-
-    // When a single file is selected, we use a default commit summary
-    // based on the file name and change status.
-    // However, for onboarding tutorial repositories, we don't want to do this.
-    // See https://github.com/desktop/desktop/issues/8354
+    const autoCommitSubmoduleCount = this.getAutoCommittedSubmoduleCount(filesSelected)
     const prepopulateCommitSummary =
       filesSelected.length === 1 && !repository.isTutorialRepository
-
-    // if this is not a github repo, we don't want to
-    // restrict what the user can do at all
     const hasWritePermissionForRepository =
       this.props.repository.gitHubRepository === null ||
       hasWritePermission(this.props.repository.gitHubRepository)
-
     const showPromptForCommittingFileHiddenByFilter =
       this.props.askForConfirmationOnCommitFilteredChanges &&
       isCommittingFileHiddenByFilter(
@@ -1299,8 +1289,6 @@ export class FilterChangesList extends React.Component<
 
     if (isShowingStashEntry) {
       dispatcher.selectWorkingDirectoryFiles(repository)
-
-      // If the button is clicked, that implies the stash was not restored or discarded
       dispatcher.incrementMetric('noActionTakenOnStashCount')
     } else {
       dispatcher.selectStashedFile(repository)
@@ -1364,8 +1352,6 @@ export class FilterChangesList extends React.Component<
     _item: IChangesListItem,
     event: React.KeyboardEvent<HTMLDivElement>
   ) => {
-    // The commit is already in-flight but this check prevents the
-    // user from changing selection.
     if (
       this.props.isCommitting &&
       (event.key === 'Enter' || event.key === ' ')
@@ -1435,14 +1421,11 @@ export class FilterChangesList extends React.Component<
     this.props.dispatcher.incrementMetric(
       'adjustedFiltersForHiddenChangesCount'
     )
-    // Clear all filters first to ensure all files are visible
     this.clearFilter()
     this.props.dispatcher.setFilterExcludedFiles(this.props.repository, false)
     this.props.dispatcher.setFilterNewFiles(this.props.repository, false)
     this.props.dispatcher.setFilterModifiedFiles(this.props.repository, false)
     this.props.dispatcher.setFilterDeletedFiles(this.props.repository, false)
-
-    // Then apply only the "Included in commit" filter to show only files being committed
     this.props.dispatcher.setIncludedChangesInCommitFilter(
       this.props.repository,
       true
@@ -1457,6 +1440,53 @@ export class FilterChangesList extends React.Component<
     if (this.filterListRef.current) {
       this.filterListRef.current.onKeyDown(event)
     }
+  }
+
+  private showDiffTreeError = async (error: unknown) => {
+    const popupError =
+      error instanceof Error
+        ? error
+        : new Error(`Diff tree operation failed: ${String(error)}`)
+
+    await this.props.dispatcher.showPopup({
+      type: PopupType.Error,
+      error: popupError,
+    })
+  }
+
+  private onCopyDiffTree = async () => {
+    try {
+      const diffTree = await getWorkingDirectoryDiffTree(this.props.repository)
+
+      if (diffTree.length === 0) {
+        throw new Error('There are no working directory changes to copy.')
+      }
+
+      clipboard.writeText(diffTree)
+    } catch (error) {
+      await this.showDiffTreeError(error)
+    }
+  }
+
+  private onLoadDiffTree = async () => {
+    try {
+      const diffTree = clipboard.readText()
+
+      if (diffTree.trim().length === 0) {
+        throw new Error(
+          'The system clipboard is empty. Copy a Git-compatible diff tree to the clipboard and try again.'
+        )
+      }
+
+      await applyDiffTree(this.props.repository, diffTree)
+      await this.props.dispatcher.refreshRepository(this.props.repository)
+    } catch (error) {
+      await this.showDiffTreeError(error)
+    }
+  }
+
+  private onCopyDiffTreeAgentInstructions = () => {
+    clipboard.writeText(DiffTreeAgentInstructions)
   }
 
   private renderFilterRow = () => {
@@ -1475,18 +1505,14 @@ export class FilterChangesList extends React.Component<
   private renderCheckBoxRow = () => {
     const { workingDirectory, rebaseConflictState, isCommitting } = this.props
     const { files } = workingDirectory
-
     const visibleFiles = this.state.filteredItems.size
-
     const includeAllValue = this.getCheckAllValue(
       workingDirectory,
       rebaseConflictState,
       this.state.filteredItems
     )
-
     const disableAllCheckbox =
       files.length === 0 || isCommitting || rebaseConflictState !== null
-
     const checkAllLabel = `${
       visibleFiles !== files.length ? `${formatNumber(visibleFiles)} of ` : ''
     }
@@ -1503,44 +1529,7 @@ export class FilterChangesList extends React.Component<
           className="changes-list-check-all"
           label={checkAllLabel}
         />
-        <div className="spacer" />
-        {this.renderSubmoduleTrackingCheckbox()}
       </div>
-    )
-  }
-
-  private onSubmoduleTrackingChanged = (
-    event: React.FormEvent<HTMLInputElement>
-  ) => {
-    const trackSubmoduleWorkingTreeChanges = event.currentTarget.checked
-    const { repository } = this.props
-
-    void this.props.dispatcher.updateRepositoryWorkflowPreferences(repository, {
-      ...repository.workflowPreferences,
-      trackSubmoduleWorkingTreeChanges,
-    })
-  }
-
-  private renderSubmoduleTrackingCheckbox = () => {
-    const trackSubmoduleWorkingTreeChanges =
-      getTrackSubmoduleWorkingTreeChanges(
-        this.props.repository.workflowPreferences
-      )
-
-    return (
-      <Checkbox
-        value={
-          trackSubmoduleWorkingTreeChanges
-            ? CheckboxValue.On
-            : CheckboxValue.Off
-        }
-        onChange={this.onSubmoduleTrackingChanged}
-        disabled={
-          this.props.isCommitting || this.props.isPushPullFetchInProgress
-        }
-        className="submodule-tracking-toggle"
-        label="Track submodules"
-      />
     )
   }
 
@@ -1691,9 +1680,7 @@ export class FilterChangesList extends React.Component<
       return null
     }
 
-    // Check if any filters are active (including text filter)
     const filtersActive = hasActiveFilters(this.props.fileListFilter)
-
     const BlankSlateImage = encodePathAsUrl(
       __dirname,
       'static/empty-no-file-selected.svg'
@@ -1702,13 +1689,10 @@ export class FilterChangesList extends React.Component<
     return (
       <div className="no-changes-filtered">
         <img src={BlankSlateImage} className="blankslate-image" alt="" />
-
         <div className="title">No files match your current filters</div>
-
         <div className="subtitle">
           {getNoResultsMessage(this.props.fileListFilter)}
         </div>
-
         {filtersActive && (
           <Button
             className="clear-filters-button"
@@ -1784,7 +1768,6 @@ export class FilterChangesList extends React.Component<
       'appliesClearAllChangesListFilterCount'
     )
 
-    // Clear all filters including text filter
     this.props.dispatcher.setChangesListFilterText(this.props.repository, '')
     this.props.dispatcher.setIncludedChangesInCommitFilter(
       this.props.repository,

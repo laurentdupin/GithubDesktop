@@ -17,6 +17,7 @@ interface IChangedFileProps {
   readonly disableSelection: boolean
   readonly showCheckbox?: boolean
   readonly className?: string
+  readonly indentationLevel?: number
   readonly checkboxTooltip?: string
   readonly focused: boolean
   /** The characters in the file path to highlight */
@@ -51,6 +52,7 @@ export class ChangedFile extends React.Component<IChangedFileProps, {}> {
       disableSelection,
       showCheckbox = true,
       className,
+      indentationLevel = 0,
       checkboxTooltip,
       focused,
       matches,
@@ -68,7 +70,8 @@ export class ChangedFile extends React.Component<IChangedFileProps, {}> {
       listItemPadding -
       (showCheckbox ? checkboxWidth : 0) -
       filePadding -
-      statusWidth
+      statusWidth -
+      indentationLevel * 14
 
     const includedText =
       this.props.include === true
@@ -82,7 +85,14 @@ export class ChangedFile extends React.Component<IChangedFileProps, {}> {
     )} ${includedText}`
 
     return (
-      <div className={`file ${className ?? ''}`.trim()}>
+      <div
+        className={`file ${className ?? ''}`.trim()}
+        style={
+          {
+            '--submodule-indent': `${indentationLevel * 14}px`,
+          } as React.CSSProperties
+        }
+      >
         {showCheckbox && (
           <TooltippedContent
             tooltip={checkboxTooltip}

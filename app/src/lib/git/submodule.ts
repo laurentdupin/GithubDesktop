@@ -70,6 +70,312 @@ async function shouldPushSubmodule(
   return aheadBehind === null || aheadBehind.ahead > 0
 }
 
+type SubmoduleBranchPublishStrategy = 'available' | 'branch' | 'tag'
+
+async function getSubmoduleBranchPublishStrategy(
+  repository: Repository,
+  remote: IRemote,
+  branchName: string,
+  commitSha: string
+): Promise<SubmoduleBranchPublishStrategy> {
+  const remoteBranchRef = `refs/heads/${branchName}`
+  const { stdout: advertisedBranch } = await git(
+    ['ls-remote', '--heads', remote.name, remoteBranchRef],
+    repository.path,
+    'getRemoteSubmoduleBranchTip',
+    {
+      env: await envForRemoteOperation(remote.url),
+      expectedErrors: AuthenticationErrors,
+    }
+  )
+  const advertisedSha = advertisedBranch.split('\t')[0]
+  if (advertisedSha.length === 0) {
+    return 'branch'
+  }
+
+  const objectCheck = await git(
+    ['cat-file', '-e', `${advertisedSha}^{commit}`],
+    repository.path,
+    'verifyRemoteSubmoduleBranchTip',
+    { successExitCodes: new Set([0, 1, 128]) }
+  )
+  if (objectCheck.exitCode !== 0) {
+    await git(
+      [
+        'fetch',
+        '--no-tags',
+        '--no-write-fetch-head',
+        remote.name,
+        remoteBranchRef,
+      ],
+      repository.path,
+      'fetchRemoteSubmoduleBranchTip',
+      {
+        env: await envForRemoteOperation(remote.url),
+        expectedErrors: AuthenticationErrors,
+      }
+    )
+  }
+
+  const localIsPublished = await git(
+    ['merge-base', '--is-ancestor', commitSha, advertisedSha],
+    repository.path,
+    'verifySubmoduleCommitOnRemoteBranch',
+    { successExitCodes: new Set([0, 1, 128]) }
+  )
+  if (localIsPublished.exitCode === 0) {
+    return 'available'
+  }
+
+  const branchCanFastForward = await git(
+    ['merge-base', '--is-ancestor', advertisedSha, commitSha],
+    repository.path,
+    'verifySubmoduleBranchCanFastForward',
+    { successExitCodes: new Set([0, 1, 128]) }
+  )
+  return branchCanFastForward.exitCode === 0 ? 'branch' : 'tag'
+}
+
+async function isCommitAvailableOnRemote(
+  repository: Repository,
+  remote: IRemote,
+  commitSha: string
+) {
+  const { stdout: remoteBranches } = await git(
+    [
+      'for-each-ref',
+      '--contains',
+      commitSha,
+      '--format=%(refname)',
+      `refs/remotes/${remote.name}/`,
+    ],
+    repository.path,
+    'isSubmoduleCommitAvailableOnRemote'
+  )
+
+  const remoteBranchRefs = remoteBranches
+    .split('\n')
+    .map(ref => ref.trim())
+    .filter(ref => ref.length > 0 && !ref.endsWith('/HEAD'))
+    .map(ref =>
+      ref.replace(`refs/remotes/${remote.name}/`, 'refs/heads/')
+    )
+
+  if (remoteBranchRefs.length > 0) {
+    const { stdout: advertisedBranches } = await git(
+      ['ls-remote', '--heads', remote.name, ...remoteBranchRefs],
+      repository.path,
+      'verifyRemoteSubmoduleBranches',
+      {
+        env: await envForRemoteOperation(remote.url),
+        expectedErrors: AuthenticationErrors,
+      }
+    )
+
+    for (const line of advertisedBranches.split('\n')) {
+      const [tip] = line.split('\t')
+      if (tip === commitSha) {
+        return true
+      }
+
+      if (tip?.length > 0) {
+        const result = await git(
+          ['merge-base', '--is-ancestor', commitSha, tip],
+          repository.path,
+          'verifySubmoduleCommitAncestor',
+          { successExitCodes: new Set([0, 1, 128]) }
+        )
+
+        if (result.exitCode === 0) {
+          return true
+        }
+      }
+    }
+  }
+
+  const { stdout: localTags } = await git(
+    ['tag', '--points-at', commitSha],
+    repository.path,
+    'getSubmoduleCommitTags'
+  )
+  const tagNames = localTags.split('\n').filter(x => x.length > 0)
+  const syntheticTag = `refs/tags/desktop-submodule/${commitSha}`
+  const tagRefs = [
+    syntheticTag,
+    `${syntheticTag}^{}`,
+    ...tagNames.flatMap(tagName => [
+      `refs/tags/${tagName}`,
+      `refs/tags/${tagName}^{}`,
+    ]),
+  ]
+  const { stdout: remoteTags } = await git(
+    ['ls-remote', '--tags', remote.name, ...tagRefs],
+    repository.path,
+    'getRemoteSubmoduleCommitTags',
+    {
+      env: await envForRemoteOperation(remote.url),
+      expectedErrors: AuthenticationErrors,
+    }
+  )
+
+  return remoteTags
+    .split('\n')
+    .some(line => line.startsWith(`${commitSha}\t`))
+}
+
+function gitlinkKey(path: string, sha: string) {
+  return `${path}\0${sha}`
+}
+
+/**
+ * Find gitlinks which are already recorded by the reachable history of the
+ * verified tips of configured remote branches. An unchanged, uninitialized
+ * child does not need to be traversed again when publishing a newer parent
+ * commit: the remote parent history already proves that exact gitlink was
+ * published previously.
+ *
+ * The server-advertised branch tips are inspected directly. A matching local
+ * remote-tracking ref can be used as-is; otherwise the advertised tip is
+ * fetched without updating the user's refs when its object is not available
+ * locally. A stale or rewritten tracking ref must not weaken the push safety
+ * check or prevent an unchanged child from being recognized.
+ */
+async function getGitlinksRecordedOnRemoteTips(repository: Repository) {
+  const gitlinks = new Set<string>()
+  const remotes = await getRemotes(repository)
+
+  for (const remote of remotes) {
+    const remoteTrackingPrefix = `refs/remotes/${remote.name}/`
+    const { stdout: localRemoteBranches } = await git(
+      [
+        'for-each-ref',
+        '--format=%(objectname) %(refname)',
+        remoteTrackingPrefix,
+      ],
+      repository.path,
+      'getLocalRemoteBranchesForSubmodulePush'
+    )
+
+    const localTips = new Map<string, { sha: string; localRef: string }>()
+    for (const line of localRemoteBranches.split('\n')) {
+      const separatorIndex = line.indexOf(' ')
+      if (separatorIndex === -1) {
+        continue
+      }
+
+      const sha = line.slice(0, separatorIndex)
+      const localRef = line.slice(separatorIndex + 1)
+      if (localRef.endsWith('/HEAD')) {
+        continue
+      }
+
+      const branchName = localRef.slice(remoteTrackingPrefix.length)
+      localTips.set(`refs/heads/${branchName}`, { sha, localRef })
+    }
+
+    if (localTips.size === 0) {
+      continue
+    }
+
+    const { stdout: advertisedBranches } = await git(
+      ['ls-remote', '--heads', remote.name, ...localTips.keys()],
+      repository.path,
+      'verifyRemoteParentBranchesForSubmodulePush',
+      {
+        env: await envForRemoteOperation(remote.url),
+        expectedErrors: AuthenticationErrors,
+      }
+    )
+
+    for (const line of advertisedBranches.split('\n')) {
+      const [advertisedSha, remoteRef] = line.split('\t')
+      const localTip =
+        remoteRef === undefined ? undefined : localTips.get(remoteRef)
+      if (
+        advertisedSha === undefined ||
+        advertisedSha.length === 0 ||
+        remoteRef === undefined
+      ) {
+        continue
+      }
+
+      let tipToInspect = localTip?.localRef
+      if (localTip?.sha !== advertisedSha) {
+        const objectCheck = await git(
+          ['cat-file', '-e', `${advertisedSha}^{commit}`],
+          repository.path,
+          'verifyAdvertisedParentTipForSubmodulePush',
+          { successExitCodes: new Set([0, 1, 128]) }
+        )
+
+        if (objectCheck.exitCode !== 0) {
+          await git(
+            [
+              'fetch',
+              '--no-tags',
+              '--no-write-fetch-head',
+              remote.name,
+              remoteRef,
+            ],
+            repository.path,
+            'fetchAdvertisedParentTipForSubmodulePush',
+            {
+              env: await envForRemoteOperation(remote.url),
+              expectedErrors: AuthenticationErrors,
+            }
+          )
+        }
+
+        const fetchedObjectCheck = await git(
+          ['cat-file', '-e', `${advertisedSha}^{commit}`],
+          repository.path,
+          'verifyFetchedParentTipForSubmodulePush',
+          { successExitCodes: new Set([0, 1, 128]) }
+        )
+        if (fetchedObjectCheck.exitCode !== 0) {
+          continue
+        }
+
+        tipToInspect = advertisedSha
+      }
+
+      if (tipToInspect === undefined) {
+        continue
+      }
+
+      const { stdout: history } = await git(
+        [
+          'log',
+          '-m',
+          '--format=',
+          '--raw',
+          '-z',
+          '--root',
+          '--no-renames',
+          '--no-abbrev',
+          tipToInspect,
+          '--',
+        ],
+        repository.path,
+        'getRemoteParentGitlinkHistoryForSubmodulePush'
+      )
+      const entries = history.split('\0')
+      for (let index = 0; index + 1 < entries.length; index += 2) {
+        const metadata = entries[index]
+        const path = entries[index + 1]
+        const match = /^:[0-7]{6} 160000 [0-9a-f]{40} ([0-9a-f]{40}) [A-Z]$/.exec(
+          metadata
+        )
+        if (match !== null) {
+          gitlinks.add(gitlinkKey(path, match[1]))
+        }
+      }
+    }
+  }
+
+  return gitlinks
+}
+
 /**
  * Update submodules after a git operation.
  *
@@ -255,14 +561,48 @@ export async function listSubmodules(
 
 export async function getSubmodulesToPush(
   repository: Repository,
-  candidatePaths?: ReadonlySet<string>
+  candidatePaths?: ReadonlySet<string>,
+  commitSha?: string
 ): Promise<ReadonlyArray<SubmodulePushContext>> {
   if (candidatePaths !== undefined && candidatePaths.size === 0) {
     return []
   }
 
-  const submodules = await listSubmodules(repository)
   const pushableSubmodules = new Array<SubmodulePushContext>()
+  const visitedRepositoryPaths = new Set<string>([
+    normalizeSubmoduleRepositoryPath(repository.path),
+  ])
+
+  await collectSubmodulesToPush(
+    repository,
+    '',
+    candidatePaths,
+    visitedRepositoryPaths,
+    pushableSubmodules,
+    commitSha
+  )
+
+  return pushableSubmodules
+}
+
+function normalizeSubmoduleRepositoryPath(path: string) {
+  const normalizedPath = resolve(path)
+  return __WIN32__ ? normalizedPath.toLowerCase() : normalizedPath
+}
+
+async function collectSubmodulesToPush(
+  repository: Repository,
+  parentPath: string,
+  candidatePaths: ReadonlySet<string> | undefined,
+  visitedRepositoryPaths: Set<string>,
+  pushableSubmodules: Array<SubmodulePushContext>,
+  commitSha?: string
+): Promise<void> {
+  const submodules =
+    commitSha === undefined
+      ? await listSubmodules(repository)
+      : await listSubmodulesAtCommit(repository, commitSha)
+  let remoteTipGitlinks: ReadonlySet<string> | undefined
 
   for (const submodule of submodules) {
     if (candidatePaths !== undefined && !candidatePaths.has(submodule.path)) {
@@ -270,15 +610,60 @@ export async function getSubmodulesToPush(
     }
 
     const submoduleRepositoryPath = join(repository.path, submodule.path)
-
     if (!(await pathExists(join(submoduleRepositoryPath, '.git')))) {
+      if (commitSha !== undefined) {
+        remoteTipGitlinks ??= await getGitlinksRecordedOnRemoteTips(repository)
+        if (remoteTipGitlinks.has(gitlinkKey(submodule.path, submodule.sha))) {
+          continue
+        }
+
+        throw new Error(
+          `Unable to verify submodule "${
+            parentPath ? `${parentPath}/${submodule.path}` : submodule.path
+          }" because it is not initialized.`
+        )
+      }
+
       continue
     }
 
-    const submoduleRepository = createSubmoduleRepository(submoduleRepositoryPath)
-    const status = await getStatus(submoduleRepository)
+    const normalizedPath = normalizeSubmoduleRepositoryPath(
+      submoduleRepositoryPath
+    )
+    if (visitedRepositoryPaths.has(normalizedPath)) {
+      continue
+    }
 
-    if (status === null || status.currentBranch === undefined) {
+    visitedRepositoryPaths.add(normalizedPath)
+
+    const submoduleRepository = createSubmoduleRepository(submoduleRepositoryPath)
+    const displayPath = parentPath
+      ? `${parentPath}/${submodule.path}`
+      : submodule.path
+
+    if (commitSha !== undefined) {
+      const objectCheck = await git(
+        ['cat-file', '-e', `${submodule.sha}^{commit}`],
+        submoduleRepository.path,
+        'verifyLocalSubmoduleCommit',
+        { successExitCodes: new Set([0, 1, 128]) }
+      )
+
+      if (objectCheck.exitCode !== 0) {
+        throw new Error(
+          `Unable to verify submodule "${displayPath}" because commit ${submodule.sha} is not available locally. Initialize or fetch the submodule, or commit a valid submodule pointer before pushing the parent repository.`
+        )
+      }
+    }
+
+    const status = await getStatus(submoduleRepository)
+    if (status === null || status.currentTip === undefined) {
+      if (commitSha !== undefined) {
+        throw new Error(
+          `Unable to verify submodule "${displayPath}" because its repository status is unavailable.`
+        )
+      }
+
       continue
     }
 
@@ -286,10 +671,18 @@ export async function getSubmodulesToPush(
     let remote: IRemote | null = null
     let remoteBranchName: string | null = null
 
-    if (status.currentUpstreamBranch !== undefined) {
+    if (
+      status.currentBranch !== undefined &&
+      status.currentUpstreamBranch !== undefined
+    ) {
       const upstream = parseUpstreamRef(status.currentUpstreamBranch)
-
       if (upstream === null) {
+        if (commitSha !== undefined) {
+          throw new Error(
+            `Unable to verify submodule "${displayPath}" because its upstream branch is invalid.`
+          )
+        }
+
         continue
       }
 
@@ -300,10 +693,74 @@ export async function getSubmodulesToPush(
     }
 
     if (remote === null) {
+      if (commitSha !== undefined) {
+        throw new Error(
+          `Unable to verify submodule "${displayPath}" because it has no remote.`
+        )
+      }
+
+      continue
+    }
+
+    const referencedCommit =
+      commitSha === undefined ? status.currentTip : submodule.sha
+
+    if (
+      await isCommitAvailableOnRemote(
+        submoduleRepository,
+        remote,
+        referencedCommit
+      )
+    ) {
+      continue
+    }
+
+    // The referenced parent commit is not available remotely, so publish any
+    // unavailable descendants first. Already-published parent commits do not
+    // need their complete (and potentially uninitialized) child graph scanned
+    // again.
+    await collectSubmodulesToPush(
+      submoduleRepository,
+      displayPath,
+      undefined,
+      visitedRepositoryPaths,
+      pushableSubmodules,
+      referencedCommit
+    )
+
+    if (status.currentBranch === undefined || status.currentTip !== referencedCommit) {
+      pushableSubmodules.push({
+        path: displayPath,
+        repository: submoduleRepository,
+        remote,
+        branchName: referencedCommit,
+        remoteBranchName: `refs/tags/desktop-submodule/${referencedCommit}`,
+      })
+      continue
+    }
+
+    const publishStrategy = await getSubmoduleBranchPublishStrategy(
+      submoduleRepository,
+      remote,
+      remoteBranchName ?? status.currentBranch,
+      referencedCommit
+    )
+    if (publishStrategy === 'available') {
+      continue
+    }
+    if (publishStrategy === 'tag') {
+      pushableSubmodules.push({
+        path: displayPath,
+        repository: submoduleRepository,
+        remote,
+        branchName: referencedCommit,
+        remoteBranchName: `refs/tags/desktop-submodule/${referencedCommit}`,
+      })
       continue
     }
 
     if (
+      commitSha === undefined &&
       !(await shouldPushSubmodule(
         submoduleRepository,
         status.currentBranch,
@@ -316,15 +773,34 @@ export async function getSubmodulesToPush(
     }
 
     pushableSubmodules.push({
-      path: submodule.path,
+      path: displayPath,
       repository: submoduleRepository,
       remote,
       branchName: status.currentBranch,
       remoteBranchName,
     })
   }
+}
 
-  return pushableSubmodules
+async function listSubmodulesAtCommit(
+  repository: Repository,
+  commitSha: string
+): Promise<ReadonlyArray<SubmoduleEntry>> {
+  const { stdout } = await git(
+    ['ls-tree', '-r', '-z', commitSha],
+    repository.path,
+    'listSubmodulesAtCommit'
+  )
+  const submodules = new Array<SubmoduleEntry>()
+
+  for (const entry of stdout.split('\0')) {
+    const match = /^160000 commit ([0-9a-f]+)\t(.+)$/.exec(entry)
+    if (match !== null) {
+      submodules.push(new SubmoduleEntry(match[1], match[2], ''))
+    }
+  }
+
+  return submodules
 }
 
 export async function resetSubmodulePaths(

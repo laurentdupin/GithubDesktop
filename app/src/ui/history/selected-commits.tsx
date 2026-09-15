@@ -445,6 +445,7 @@ export class SelectedCommits extends React.Component<
       action: () => this.onViewOnGitHub(selectedCommits[0].sha, file),
       enabled:
         selectedCommits.length === 1 &&
+        file.submoduleChange === null &&
         !localCommitSHAs.includes(selectedCommits[0].sha) &&
         !!gitHubRepository &&
         this.props.selectedCommits.length > 0,

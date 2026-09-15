@@ -131,12 +131,26 @@ export type SubmoduleChange = {
   readonly submodulePath: string
   /** The absolute path to the submodule repository on disk. */
   readonly submoduleRepositoryPath: string
+  /** Number of submodule boundaries between the root repository and this file. */
+  readonly depth: number
   /** The path of the changed file within the submodule repository. */
   readonly pathInSubmodule: string
   /**
    * The original path of the changed file within the submodule repository.
    * Only present for renamed/copied files.
    */
+  readonly oldPathInSubmodule?: string
+}
+
+/** Metadata for a historical file change owned by a submodule repository. */
+export type CommittedSubmoduleChange = {
+  /** Absolute path to the repository which owns this file. */
+  readonly repositoryPath: string
+  /** Number of submodule boundaries from the root history repository. */
+  readonly depth: number
+  /** Path to the file relative to its owning submodule repository. */
+  readonly pathInSubmodule: string
+  /** Original relative path for renamed or copied files. */
   readonly oldPathInSubmodule?: string
 }
 
@@ -373,7 +387,8 @@ export class CommittedFileChange extends FileChange {
     path: string,
     status: AppFileStatus,
     public readonly commitish: string,
-    public readonly parentCommitish: string
+    public readonly parentCommitish: string,
+    public readonly submoduleChange: CommittedSubmoduleChange | null = null
   ) {
     super(path, status)
 

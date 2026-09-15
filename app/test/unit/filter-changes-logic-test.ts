@@ -215,6 +215,7 @@ describe('filter-changes-logic', () => {
             {
               submodulePath: 'foo/submodule',
               submoduleRepositoryPath: 'C:/submodule',
+              depth: 1,
               pathInSubmodule: 'README.md',
             }
           ),
@@ -243,6 +244,7 @@ describe('filter-changes-logic', () => {
             {
               submodulePath: 'foo/submodule',
               submoduleRepositoryPath: 'C:/submodule',
+              depth: 1,
               pathInSubmodule: 'README.md',
             }
           ),
