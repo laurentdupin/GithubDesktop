@@ -1,5 +1,10 @@
 @import '../../../styles/variables';
 
+#submodule-update-preview {
+  width: min(900px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+
 .fork-sync-preview-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -85,6 +90,66 @@
 
 .fork-sync-preview-empty {
   margin-top: var(--spacing);
+}
+
+.submodule-update-header,
+.submodule-update-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 2fr) minmax(110px, 0.8fr) minmax(78px, 0.45fr)
+    minmax(78px, 0.45fr) minmax(125px, 0.8fr);
+  gap: var(--spacing);
+  align-items: center;
+
+  > * {
+    min-width: 0;
+  }
+}
+
+.submodule-update-header {
+  padding: var(--spacing-half) var(--spacing);
+  color: var(--text-secondary-color);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.submodule-update-row {
+  padding: var(--spacing) var(--spacing);
+  border-top: 1px solid var(--box-border-color);
+}
+
+.submodule-update-path {
+  overflow-wrap: anywhere;
+
+  strong {
+    display: block;
+    line-height: 1.35;
+  }
+}
+
+.submodule-update-branch {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.submodule-update-state {
+  line-height: 1.35;
+}
+
+.submodule-update-sha {
+  white-space: nowrap;
+}
+
+.submodule-update-sha-unavailable {
+  color: var(--text-secondary-color);
+}
+
+.submodule-update-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing);
 }
 
 .fork-sync-summary {

@@ -133,6 +133,7 @@ import { SAMLReauthRequiredDialog } from './saml-reauth-required/saml-reauth-req
 import { CreateForkDialog } from './forks/create-fork-dialog'
 import { ForkSyncPreviewDialog } from './forks/fork-sync-preview-dialog'
 import { ForkSyncSummaryDialog } from './forks/fork-sync-summary-dialog'
+import { SubmoduleUpdatePreviewDialog } from './submodules/submodule-update-preview-dialog'
 import { findContributionTargetDefaultBranch } from '../lib/branch'
 import {
   GitHubRepository,
@@ -2358,6 +2359,15 @@ export class App extends React.Component<IAppProps, IAppState> {
             onDismissed={onPopupDismissedFn}
           />
         )
+      case PopupType.SubmoduleUpdatePreview:
+        return (
+          <SubmoduleUpdatePreviewDialog
+            repository={popup.repository}
+            fetchRemotes={popup.fetchRemotes}
+            onDismissed={onPopupDismissedFn}
+            dispatcher={this.props.dispatcher}
+          />
+        )
       case PopupType.LocalChangesOverwritten:
         const selectedState = this.state.selectedState
 
@@ -3718,7 +3728,10 @@ export class App extends React.Component<IAppProps, IAppState> {
         numTagsToPush={state.tagsToPush !== null ? state.tagsToPush.length : 0}
         remoteName={remoteName}
         lastFetched={state.lastFetched}
-        networkActionInProgress={state.isPushPullFetchInProgress}
+        networkActionInProgress={
+          state.isPushPullFetchInProgress ||
+          state.submoduleUpdatePreview?.isLoading === true
+        }
         progress={progress}
         tipState={tip.kind}
         pullWithRebase={pullWithRebase}
@@ -3805,6 +3818,95 @@ export class App extends React.Component<IAppProps, IAppState> {
     }
 
     return this.props.dispatcher.showForkSyncPreview(selection.repository)
+  }
+
+  private renderSubmoduleUpdateToolbarButton(): JSX.Element | null {
+    const selection = this.state.selectedState
+    if (selection == null || selection.type !== SelectionType.Repository) {
+      return null
+    }
+
+    const state = selection.state
+    const preview = state.submoduleUpdatePreview
+    const updateCount =
+      preview === null
+        ? 0
+        : preview.stats.behindCount + preview.stats.divergedCount
+    const title =
+      preview?.isLoading === true
+        ? 'Fetching Submodules'
+        : preview !== null &&
+          (preview.stats.divergedCount > 0 || preview.stats.blockedCount > 0)
+        ? 'Review Submodules'
+        : preview !== null && preview.stats.behindCount > 0
+        ? 'Pull Submodules'
+        : 'Fetch Submodules'
+    const description =
+      preview?.isLoading === true
+        ? 'Click to view progress'
+        : preview === null || preview.lastFetched === null
+        ? 'Check configured branches'
+        : updateCount > 0
+        ? 'Remote updates available'
+        : 'No remote updates'
+    const disabled =
+      state.isPushPullFetchInProgress ||
+      state.checkoutProgress !== null ||
+      state.revertProgress !== null ||
+      state.changesState.conflictState !== null ||
+      state.multiCommitOperationState !== null
+    const badge =
+      updateCount > 0 ? (
+        <div className="ahead-behind">
+          <span>
+            {formatCompactNumber(updateCount)}
+            <Octicon symbol={octicons.arrowDown} />
+          </span>
+        </div>
+      ) : null
+
+    return (
+      <ToolbarButton
+        className="submodule-update-button"
+        style={ToolbarButtonStyle.Subtitle}
+        title={title}
+        description={description}
+        tooltip="Fetch and update recursive submodules from their configured remote branches"
+        icon={octicons.repoPull}
+        disabled={disabled}
+        onClick={this.onUpdateSubmodules}
+      >
+        {badge}
+      </ToolbarButton>
+    )
+  }
+
+  private onUpdateSubmodules = () => {
+    const selection = this.state.selectedState
+    if (selection == null || selection.type !== SelectionType.Repository) {
+      return
+    }
+
+    const preview = selection.state.submoduleUpdatePreview
+    const updateCount =
+      preview === null
+        ? 0
+        : preview.stats.behindCount + preview.stats.divergedCount
+    const hasReviewableResults =
+      preview !== null &&
+      (updateCount > 0 ||
+        preview.stats.aheadCount > 0 ||
+        preview.stats.blockedCount > 0)
+    const fetchRemotes =
+      preview === null ||
+      (!preview.isLoading &&
+        !preview.hasUnviewedResults &&
+        !hasReviewableResults)
+
+    return this.props.dispatcher.showSubmoduleUpdatePreview(
+      selection.repository,
+      fetchRemotes
+    )
   }
 
   private showCreateBranch = () => {
@@ -4054,6 +4156,7 @@ export class App extends React.Component<IAppProps, IAppState> {
         {this.renderWorktreeToolbarButton()}
         {this.renderBranchToolbarButton()}
         {this.renderPushPullToolbarButton()}
+        {this.renderSubmoduleUpdateToolbarButton()}
         {this.renderForkSyncToolbarButton()}
       </Toolbar>
     )

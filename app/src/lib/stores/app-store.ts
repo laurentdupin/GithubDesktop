@@ -258,6 +258,8 @@ import {
   getSubmodulesToPush,
   getShelves,
   getShelfFiles,
+  getSubmoduleUpdatePreview,
+  applySubmoduleUpdates,
   git,
 } from '../git'
 import {
@@ -364,9 +366,7 @@ import { parseRemote } from '../../lib/remote-parsing'
 import { createTutorialRepository } from './helpers/create-tutorial-repository'
 import { sendNonFatalException } from '../helpers/non-fatal-exception'
 import { getDefaultDir } from '../../ui/lib/default-dir'
-import {
-  WorkflowPreferences,
-} from '../../models/workflow-preferences'
+import { WorkflowPreferences } from '../../models/workflow-preferences'
 import { RepositoryIndicatorUpdater } from './helpers/repository-indicator-updater'
 import { isAttributableEmailFor } from '../email'
 import { TrashNameLabel } from '../../ui/lib/context-menu'
@@ -405,6 +405,10 @@ import {
   IForkSyncPreviewEntry,
   summarizeForkSyncPreviewEntries,
 } from '../../models/fork-sync'
+import {
+  ISubmoduleUpdateEntry,
+  summarizeSubmoduleUpdates,
+} from '../../models/submodule-update'
 import {
   filterOutDesktopShelfBranches,
   isDesktopShelfBranch,
@@ -614,10 +618,7 @@ const numberArraysEqual = (
   b: ReadonlyArray<number>
 ) => a.length === b.length && a.every((value, index) => value === b[index])
 
-const branchesEqual = (
-  a: ReadonlyArray<Branch>,
-  b: ReadonlyArray<Branch>
-) =>
+const branchesEqual = (a: ReadonlyArray<Branch>, b: ReadonlyArray<Branch>) =>
   a.length === b.length &&
   a.every((branch, index) => {
     const other = b[index]
@@ -745,6 +746,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
   private readonly forkSyncPreviewRefreshers = new Map<
     number,
     Promise<ReadonlyArray<IForkSyncPreviewEntry>>
+  >()
+  private readonly submoduleUpdatePreviewRefreshers = new Map<
+    number,
+    Promise<ReadonlyArray<ISubmoduleUpdateEntry>>
   >()
   /** The function to resolve the current Open in Desktop flow. */
   private resolveOpenInDesktop:
@@ -1500,23 +1505,23 @@ export class AppStore extends TypedBaseStore<IAppState> {
         }
       }
 
-        return {
-          tip: gitStore.tip,
-          defaultBranch: gitStore.defaultBranch,
-          upstreamDefaultBranch: gitStore.upstreamDefaultBranch,
-          allBranches: visibleBranchesChanged
-            ? visibleBranches
-            : state.allBranches,
-          shelfBranches: shelfBranchesChanged
-            ? shelfBranches
-            : state.shelfBranches,
-          recentBranches: visibleRecentBranchesChanged
-            ? visibleRecentBranches
-            : state.recentBranches,
-          pullWithRebase: gitStore.pullWithRebase,
-          currentPullRequest,
-        }
-      })
+      return {
+        tip: gitStore.tip,
+        defaultBranch: gitStore.defaultBranch,
+        upstreamDefaultBranch: gitStore.upstreamDefaultBranch,
+        allBranches: visibleBranchesChanged
+          ? visibleBranches
+          : state.allBranches,
+        shelfBranches: shelfBranchesChanged
+          ? shelfBranches
+          : state.shelfBranches,
+        recentBranches: visibleRecentBranchesChanged
+          ? visibleRecentBranches
+          : state.recentBranches,
+        pullWithRebase: gitStore.pullWithRebase,
+        currentPullRequest,
+      }
+    })
 
     const prevTip = prevRepositoryState.branchesState.tip
     const currentTip = gitStore.tip
@@ -1525,7 +1530,8 @@ export class AppStore extends TypedBaseStore<IAppState> {
       shelfBranchesChanged ||
       visibleRecentBranchesChanged ||
       prevRepositoryState.changesState.shelves.length > 0 ||
-      (prevTip.kind === TipState.Valid && isDesktopShelfBranch(prevTip.branch)) ||
+      (prevTip.kind === TipState.Valid &&
+        isDesktopShelfBranch(prevTip.branch)) ||
       (currentTip.kind === TipState.Valid &&
         isDesktopShelfBranch(currentTip.branch))
 
@@ -2349,15 +2355,16 @@ export class AppStore extends TypedBaseStore<IAppState> {
   private getPinnedRepositoriesForTrackedRepositories(
     pinnedRepositories: ReadonlyArray<number>
   ): ReadonlyArray<number> {
-    const repositoryIds = new Set(this.repositories.map(repository => repository.id))
+    const repositoryIds = new Set(
+      this.repositories.map(repository => repository.id)
+    )
 
     return [...new Set(pinnedRepositories)].filter(id => repositoryIds.has(id))
   }
 
   private syncPinnedRepositoriesWithTrackedRepositories() {
-    const nextPinnedRepositories = this.getPinnedRepositoriesForTrackedRepositories(
-      this.pinnedRepositories
-    )
+    const nextPinnedRepositories =
+      this.getPinnedRepositoriesForTrackedRepositories(this.pinnedRepositories)
 
     if (numberArraysEqual(this.pinnedRepositories, nextPinnedRepositories)) {
       return
@@ -4031,7 +4038,8 @@ export class AppStore extends TypedBaseStore<IAppState> {
     if (
       selectionAfterLoad.kind !== ChangesSelectionKind.Shelf ||
       selectionAfterLoad.shelf.id !== selectionBeforeLoad.shelf.id ||
-      selectionAfterLoad.selectedShelfFile !== selectionBeforeLoad.selectedShelfFile
+      selectionAfterLoad.selectedShelfFile !==
+        selectionBeforeLoad.selectedShelfFile
     ) {
       return
     }
@@ -4698,7 +4706,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
       aheadBehind: status.branchAheadBehind || null,
       currentBranch:
         status.currentBranch ??
-        (status.currentTip !== undefined ? DetachedRepositoryBranchLabel : null),
+        (status.currentTip !== undefined
+          ? DetachedRepositoryBranchLabel
+          : null),
       changedFilesCount: status.workingDirectory.files.length,
     })
   }
@@ -5834,9 +5844,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
     if (submodules.length > 0) {
       log.info(
-        `[SubmodulePush] Deepest-first push order for ${repository.path}: ${submodules
-          .map(submodule => submodule.path)
-          .join(' -> ')}`
+        `[SubmodulePush] Deepest-first push order for ${
+          repository.path
+        }: ${submodules.map(submodule => submodule.path).join(' -> ')}`
       )
     }
 
@@ -6184,7 +6194,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
             })
 
             await this.refreshBranchProtectionState(repository)
-            await this._refreshRepository(repository, { refreshBranches: false })
+            await this._refreshRepository(repository, {
+              refreshBranches: false,
+            })
 
             pushed = true
             return true
@@ -6285,6 +6297,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
     try {
       await fn()
     } finally {
+      // Progress is presentation state for the operation guarded here. Clear it
+      // at the same boundary as the in-progress flag so handled failures and
+      // early returns cannot leave the toolbar displaying a finished action.
+      this.updatePushPullFetchProgress(repository, null)
       this.repositoryStateCache.update(repository, () => ({
         isPushPullFetchInProgress: false,
       }))
@@ -6841,7 +6857,8 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return existingPromise
     }
 
-    const previousPreview = this.repositoryStateCache.get(repository).forkSyncPreview
+    const previousPreview =
+      this.repositoryStateCache.get(repository).forkSyncPreview
 
     if (previousPreview !== null) {
       this.repositoryStateCache.update(repository, () => ({
@@ -6906,6 +6923,123 @@ export class AppStore extends TypedBaseStore<IAppState> {
     return promise
   }
 
+  public async _loadSubmoduleUpdatePreview(
+    repository: Repository,
+    fetchRemotes: boolean,
+    useCachedResult = false
+  ): Promise<ReadonlyArray<ISubmoduleUpdateEntry>> {
+    const existingPromise = this.submoduleUpdatePreviewRefreshers.get(
+      repository.id
+    )
+    if (existingPromise !== undefined) {
+      return existingPromise
+    }
+
+    const currentPreview =
+      this.repositoryStateCache.get(repository).submoduleUpdatePreview
+
+    if (useCachedResult && currentPreview !== null) {
+      return currentPreview.entries
+    }
+
+    this.repositoryStateCache.update(repository, () => ({
+      submoduleUpdatePreview: {
+        entries: currentPreview?.entries ?? [],
+        stats: currentPreview?.stats ?? summarizeSubmoduleUpdates([]),
+        isLoading: true,
+        hasUnviewedResults: currentPreview?.hasUnviewedResults ?? false,
+        lastFetched: currentPreview?.lastFetched ?? null,
+      },
+    }))
+    this.emitUpdate()
+
+    const promise = (async () => {
+      try {
+        const entries = await getSubmoduleUpdatePreview(
+          repository,
+          fetchRemotes
+        )
+        this.repositoryStateCache.update(repository, () => ({
+          submoduleUpdatePreview: {
+            entries,
+            stats: summarizeSubmoduleUpdates(entries),
+            isLoading: false,
+            hasUnviewedResults: true,
+            lastFetched: fetchRemotes
+              ? new Date()
+              : currentPreview?.lastFetched ?? null,
+          },
+        }))
+        this.emitUpdate()
+        return entries
+      } catch (error) {
+        this.repositoryStateCache.update(repository, state => ({
+          submoduleUpdatePreview:
+            state.submoduleUpdatePreview === null
+              ? null
+              : { ...state.submoduleUpdatePreview, isLoading: false },
+        }))
+        this.emitUpdate()
+        throw error
+      } finally {
+        this.submoduleUpdatePreviewRefreshers.delete(repository.id)
+      }
+    })()
+
+    this.submoduleUpdatePreviewRefreshers.set(repository.id, promise)
+    return promise
+  }
+
+  public _markSubmoduleUpdatePreviewViewed(repository: Repository): void {
+    this.repositoryStateCache.update(repository, state => ({
+      submoduleUpdatePreview:
+        state.submoduleUpdatePreview === null
+          ? null
+          : { ...state.submoduleUpdatePreview, hasUnviewedResults: false },
+    }))
+    this.emitUpdate()
+  }
+
+  public async _applySubmoduleUpdates(
+    repository: Repository,
+    entries: ReadonlyArray<ISubmoduleUpdateEntry>
+  ): Promise<void> {
+    this.repositoryStateCache.update(repository, state => ({
+      submoduleUpdatePreview:
+        state.submoduleUpdatePreview === null
+          ? null
+          : { ...state.submoduleUpdatePreview, isLoading: true },
+    }))
+    this.emitUpdate()
+
+    try {
+      const result = await applySubmoduleUpdates(entries)
+      await this._refreshRepository(repository, { refreshBranches: false })
+      await this._loadSubmoduleUpdatePreview(repository, false, false)
+
+      if (result.kind === 'conflicts') {
+        const [conflictedRepository] = await this._addRepositories([
+          result.entry.repositoryPath,
+        ])
+        if (conflictedRepository !== undefined) {
+          await this._selectRepository(conflictedRepository)
+          await this._loadStatus(conflictedRepository)
+        }
+      }
+    } catch (error) {
+      log.error('Failed updating submodules', error)
+      this.emitError(error)
+    } finally {
+      this.repositoryStateCache.update(repository, state => ({
+        submoduleUpdatePreview:
+          state.submoduleUpdatePreview === null
+            ? null
+            : { ...state.submoduleUpdatePreview, isLoading: false },
+      }))
+      this.emitUpdate()
+    }
+  }
+
   public async _loadForkSyncPreview(
     repository: Repository
   ): Promise<ReadonlyArray<IForkSyncPreviewEntry>> {
@@ -6957,7 +7091,8 @@ export class AppStore extends TypedBaseStore<IAppState> {
     const entries = new Array<IForkSyncPreviewEntry>()
 
     for (const candidate of candidates) {
-      const { branchName, localBranch, originBranch, upstreamBranch } = candidate
+      const { branchName, localBranch, originBranch, upstreamBranch } =
+        candidate
 
       if (localBranch === null) {
         entries.push({
@@ -6981,8 +7116,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
           upstreamRef: upstreamBranch.ref,
           status: 'skipped-diverged-origin',
           commitCountFromParent: 0,
-          skipReason:
-            'Local branch tip does not match the branch on origin.',
+          skipReason: 'Local branch tip does not match the branch on origin.',
           willPush: false,
         })
         continue
@@ -7097,7 +7231,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
     ).length
 
     log.info(
-      `[ForkSync] Preview computed for ${repository.path}: candidates=${candidates.length}, localBranches=${localBranchCount}, remoteBranches=${
+      `[ForkSync] Preview computed for ${repository.path}: candidates=${
+        candidates.length
+      }, localBranches=${localBranchCount}, remoteBranches=${
         branches.length - localBranchCount
       }, needsSync=${needsSyncCount}, conflicts=${conflictsCount}, upToDate=${upToDateCount}, skippedNoLocal=${skippedNoLocalCount}, skippedDivergedOrigin=${skippedDivergedOriginCount}, defaultBranch=${
         defaultBranchName ?? 'none'
@@ -10115,7 +10251,9 @@ export class AppStore extends TypedBaseStore<IAppState> {
     const { tip } = branchesState
 
     if (tip.kind !== TipState.Valid) {
-      throw new Error('Shelves can only be created while a branch is checked out.')
+      throw new Error(
+        'Shelves can only be created while a branch is checked out.'
+      )
     }
 
     const result = await createShelfBranchFromPaths(
@@ -10162,19 +10300,26 @@ export class AppStore extends TypedBaseStore<IAppState> {
       gitStore.defaultRemote?.name
 
     if (resolvedRemoteName === null || resolvedRemoteName === undefined) {
-      throw new Error('Unable to publish shelf because the repository has no remote.')
+      throw new Error(
+        'Unable to publish shelf because the repository has no remote.'
+      )
     }
 
     const remote = await this.getShelfRemote(repository, resolvedRemoteName)
     if (remote === null) {
-      throw new Error(`Unable to find remote "${resolvedRemoteName}" for publishing shelves.`)
+      throw new Error(
+        `Unable to find remote "${resolvedRemoteName}" for publishing shelves.`
+      )
     }
 
     await pushRepo(repository, remote, shelfBranchName, null, null)
     await this._refreshRepository(repository)
   }
 
-  public async _deleteShelf(repository: Repository, shelf: IShelf): Promise<void> {
+  public async _deleteShelf(
+    repository: Repository,
+    shelf: IShelf
+  ): Promise<void> {
     const selection =
       this.repositoryStateCache.get(repository).changesState.selection
 

@@ -432,10 +432,7 @@ export class FilterChangesList extends React.Component<
   private onIncludeAllChanged = (event: React.FormEvent<HTMLInputElement>) => {
     const include = event.currentTarget.checked
     const filteredItemPaths = this.getCommitCandidateFiles(
-      Array.from(
-        this.state.filteredItems,
-        ([, v]) => v.change
-      )
+      Array.from(this.state.filteredItems, ([, v]) => v.change)
     )
     this.props.onIncludeChanged(filteredItemPaths, include)
   }
@@ -462,9 +459,10 @@ export class FilterChangesList extends React.Component<
         ? false
         : null
 
-    const include = rebaseConflictState !== null
-      ? file.status.kind !== AppFileStatusKind.Untracked
-      : includeAll
+    const include =
+      rebaseConflictState !== null
+        ? file.status.kind !== AppFileStatusKind.Untracked
+        : includeAll
 
     const disableSelection =
       isCommitting || rebaseConflictState !== null || syntheticSubmoduleChange
@@ -592,9 +590,7 @@ export class FilterChangesList extends React.Component<
             allShelveablePaths
           ),
         enabled:
-          hasShelveableChanges &&
-          this.props.branch !== null &&
-          !hasConflicts,
+          hasShelveableChanges && this.props.branch !== null && !hasConflicts,
       },
       {
         label: hasStash ? confirmStashAllChangesLabel : stashAllChangesLabel,
@@ -764,9 +760,15 @@ export class FilterChangesList extends React.Component<
     const submoduleChange = toSubmoduleRepositoryChange(file)
     const submodulePath = submoduleChange.file.path
     const onIgnoreFile = (pattern: string | string[]) =>
-      this.props.dispatcher.appendIgnoreFile(submoduleChange.repository, pattern)
+      this.props.dispatcher.appendIgnoreFile(
+        submoduleChange.repository,
+        pattern
+      )
     const onIgnorePattern = (pattern: string | string[]) =>
-      this.props.dispatcher.appendIgnoreRule(submoduleChange.repository, pattern)
+      this.props.dispatcher.appendIgnoreRule(
+        submoduleChange.repository,
+        pattern
+      )
     const repositoryPath =
       file.status.submoduleStatus === undefined
         ? submoduleChange.repository.path
@@ -866,7 +868,10 @@ export class FilterChangesList extends React.Component<
       {
         label: shelveMenuLabel,
         action: () =>
-          this.props.dispatcher.showCreateShelfDialog(this.props.repository, paths),
+          this.props.dispatcher.showCreateShelfDialog(
+            this.props.repository,
+            paths
+          ),
         enabled:
           paths.length > 0 &&
           this.props.rebaseConflictState === null &&
@@ -933,13 +938,17 @@ export class FilterChangesList extends React.Component<
       items.push(
         { type: 'separator' },
         {
-          label: __DARWIN__ ? 'Include Selected Files' : 'Include selected files',
+          label: __DARWIN__
+            ? 'Include Selected Files'
+            : 'Include selected files',
           action: () => {
             selectedFiles.map(file => this.props.onIncludeChanged(file, true))
           },
         },
         {
-          label: __DARWIN__ ? 'Exclude Selected Files' : 'Exclude selected files',
+          label: __DARWIN__
+            ? 'Exclude Selected Files'
+            : 'Exclude selected files',
           action: () => {
             selectedFiles.map(file => this.props.onIncludeChanged(file, false))
           },
@@ -1130,7 +1139,8 @@ export class FilterChangesList extends React.Component<
     const fileCount = parentRepositoryFiles.length
     const filesSelected = this.getFilesSelectedForCommit(workingDirectory.files)
     const anyFilesSelected = filesSelected.length > 0
-    const autoCommitSubmoduleCount = this.getAutoCommittedSubmoduleCount(filesSelected)
+    const autoCommitSubmoduleCount =
+      this.getAutoCommittedSubmoduleCount(filesSelected)
     const prepopulateCommitSummary =
       filesSelected.length === 1 && !repository.isTutorialRepository
     const hasWritePermissionForRepository =

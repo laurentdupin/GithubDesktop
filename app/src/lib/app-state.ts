@@ -67,6 +67,7 @@ import type {
 import { Popup } from '../models/popup'
 import { RepoRulesInfo } from '../models/repo-rules'
 import { IForkSyncPreviewCache } from '../models/fork-sync'
+import { ISubmoduleUpdatePreviewCache } from '../models/submodule-update'
 import { IAPIRepoRuleset } from './api'
 import { ICustomIntegration } from './custom-integration'
 import { Emoji } from './emoji'
@@ -614,6 +615,9 @@ export interface IRepositoryState {
 
   /** Cached fork sync preview data derived from the latest fetch. */
   readonly forkSyncPreview: IForkSyncPreviewCache | null
+
+  /** Cached recursive submodule remote state. */
+  readonly submoduleUpdatePreview: ISubmoduleUpdatePreviewCache | null
 
   readonly hookProgress: HookProgress | null
   readonly subscribeToCommitOutput: TerminalOutputListener | null

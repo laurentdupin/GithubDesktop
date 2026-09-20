@@ -64,7 +64,10 @@ export async function getSubmoduleRepositoryWorkingDirectory(
   repository: Repository
   files: ReadonlyArray<WorkingDirectoryFileChange>
 } | null> {
-  const submoduleRepositoryPath = Path.join(parentRepository.path, submodulePath)
+  const submoduleRepositoryPath = Path.join(
+    parentRepository.path,
+    submodulePath
+  )
 
   if (!(await pathExists(Path.join(submoduleRepositoryPath, '.git')))) {
     return null
@@ -103,10 +106,11 @@ async function getSubmoduleWorkingDirectoryFilesRecursive(
   depth: number,
   visitedRepositories: Set<string>
 ): Promise<ReadonlyArray<WorkingDirectoryFileChange>> {
-  const submoduleWorkingDirectory = await getSubmoduleRepositoryWorkingDirectory(
-    parentRepository,
-    submodulePath
-  )
+  const submoduleWorkingDirectory =
+    await getSubmoduleRepositoryWorkingDirectory(
+      parentRepository,
+      submodulePath
+    )
 
   if (submoduleWorkingDirectory === null) {
     return []
@@ -139,10 +143,7 @@ async function getSubmoduleWorkingDirectoryFilesRecursive(
       file.status.submoduleStatus?.modifiedChanges === true ||
       file.status.submoduleStatus?.untrackedChanges === true
     ) {
-      const nestedDisplayPath = Path.posix.join(
-        displaySubmodulePath,
-        file.path
-      )
+      const nestedDisplayPath = Path.posix.join(displaySubmodulePath, file.path)
       const nestedFiles = await getSubmoduleWorkingDirectoryFilesRecursive(
         submoduleWorkingDirectory.repository,
         file.path,
@@ -183,9 +184,10 @@ export async function expandWorkingDirectoryWithSubmoduleChanges(
   return expanded.flat()
 }
 
-export function toSubmoduleRepositoryChange(
+export function toSubmoduleRepositoryChange(file: WorkingDirectoryFileChange): {
+  repository: Repository
   file: WorkingDirectoryFileChange
-): { repository: Repository; file: WorkingDirectoryFileChange } {
+} {
   if (!isSyntheticSubmoduleChange(file)) {
     throw new Error('Expected a synthetic submodule change')
   }
@@ -199,7 +201,8 @@ export function toSubmoduleRepositoryChange(
     file.status.kind === AppFileStatusKind.Renamed
       ? {
           ...file.status,
-          oldPath: file.submoduleChange.oldPathInSubmodule ?? file.status.oldPath,
+          oldPath:
+            file.submoduleChange.oldPathInSubmodule ?? file.status.oldPath,
         }
       : file.status
 

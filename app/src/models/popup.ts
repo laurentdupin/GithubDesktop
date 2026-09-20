@@ -116,6 +116,7 @@ export enum PopupType {
   CommitProgress = 'CommitProgress',
   ForkSyncPreview = 'ForkSyncPreview',
   ForkSyncSummary = 'ForkSyncSummary',
+  SubmoduleUpdatePreview = 'SubmoduleUpdatePreview',
   CreateShelf = 'CreateShelf',
   DeleteShelf = 'DeleteShelf',
   AddWorktree = 'AddWorktree',
@@ -551,6 +552,11 @@ export type PopupDetail =
       type: PopupType.ForkSyncSummary
       repository: Repository
       summary: IForkSyncSummary
+    }
+  | {
+      type: PopupType.SubmoduleUpdatePreview
+      repository: Repository
+      fetchRemotes: boolean
     }
   | {
       type: PopupType.AddWorktree

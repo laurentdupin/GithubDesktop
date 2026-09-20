@@ -142,15 +142,12 @@ describe('git/submodule', () => {
       assert.equal(result.length, 1)
       assert.equal(result[0].path, 'foo/submodule')
       assert.equal(result[0].repository.path, submodulePath)
-      assert.equal(result[0].branchName, submoduleStatus.currentBranch)
+      assert.equal(result[0].branchName, submoduleStatus.currentTip)
       assert.equal(result[0].remote.name, 'origin')
-      assert.equal(
-        result[0].remoteBranchName,
-        submoduleStatus.currentBranch
-      )
+      assert.equal(result[0].remoteBranchName, submoduleStatus.currentBranch)
     })
 
-    it('publishes a diverged submodule commit as a tag', async t => {
+    it('requires explicit intervention for a diverged submodule commit', async t => {
       const testRepoPath = await setupFixtureRepository(
         t,
         'submodule-basic-setup'
@@ -166,9 +163,90 @@ describe('git/submodule', () => {
 
       await writeFile(path.join(submodulePath, 'README.md'), 'local change')
       await exec(['commit', '-am', 'local change'], submodulePath)
-      const localCommit = (
+      await exec(['clone', remotePath, remoteUpdaterPath], testRepoPath)
+      await exec(
+        ['config', 'user.name', 'GitHub Desktop Test'],
+        remoteUpdaterPath
+      )
+      await exec(
+        ['config', 'user.email', 'test@githubdesktop.invalid'],
+        remoteUpdaterPath
+      )
+      await writeFile(
+        path.join(remoteUpdaterPath, 'README.md'),
+        'remote change'
+      )
+      await exec(['commit', '-am', 'remote change'], remoteUpdaterPath)
+      await exec(['push', 'origin', 'master'], remoteUpdaterPath)
+
+      await assert.rejects(
+        getSubmodulesToPush(repository),
+        /has diverged from origin\/master/
+      )
+    })
+
+    it('publishes an unavailable detached commit to the established branch', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+
+      await writeFile(path.join(submodulePath, 'README.md'), 'detached change')
+      await exec(['commit', '-am', 'detached submodule commit'], submodulePath)
+      const head = (
         await exec(['rev-parse', 'HEAD'], submodulePath)
       ).stdout.trim()
+      await exec(['tag', 'local-only-tag', head], submodulePath)
+      await exec(['checkout', '--detach', head], submodulePath)
+
+      const result = await getSubmodulesToPush(repository)
+      assert.equal(result.length, 1)
+      assert.equal(result[0].branchName, head)
+      assert.equal(result[0].remoteBranchName, 'master')
+
+      const status = await getStatus(
+        new Repository(submodulePath, -1, null, false)
+      )
+      assert.equal(status?.currentBranch, undefined)
+      assert.equal(status?.currentTip, head)
+    })
+
+    it('skips a detached commit already available from its remote', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+      const head = (
+        await exec(['rev-parse', 'HEAD'], submodulePath)
+      ).stdout.trim()
+
+      await exec(['checkout', '--detach', head], submodulePath)
+
+      const result = await getSubmodulesToPush(repository)
+      assert.equal(result.length, 0)
+    })
+
+    it('stops when a detached submodule has remote changes', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+      const remotePath = await createTempDirectory(t)
+      const remoteUpdaterPath = await createTempDirectory(t)
+
+      await exec(['init', '--bare'], remotePath)
+      await exec(['remote', 'set-url', 'origin', remotePath], submodulePath)
+      await exec(['push', '-u', 'origin', 'master'], submodulePath)
+      const publishedCommit = (
+        await exec(['rev-parse', 'HEAD'], submodulePath)
+      ).stdout.trim()
+      await exec(['checkout', '--detach', publishedCommit], submodulePath)
 
       await exec(['clone', remotePath, remoteUpdaterPath], testRepoPath)
       await exec(
@@ -179,59 +257,18 @@ describe('git/submodule', () => {
         ['config', 'user.email', 'test@githubdesktop.invalid'],
         remoteUpdaterPath
       )
-      await writeFile(path.join(remoteUpdaterPath, 'README.md'), 'remote change')
-      await exec(['commit', '-am', 'remote change'], remoteUpdaterPath)
+      await writeFile(path.join(remoteUpdaterPath, 'remote.txt'), 'newer')
+      await exec(['add', 'remote.txt'], remoteUpdaterPath)
+      await exec(['commit', '-m', 'advance remote branch'], remoteUpdaterPath)
       await exec(['push', 'origin', 'master'], remoteUpdaterPath)
 
-      const result = await getSubmodulesToPush(repository)
-      assert.equal(result.length, 1)
-      assert.equal(result[0].branchName, localCommit)
-      assert.equal(
-        result[0].remoteBranchName,
-        `refs/tags/desktop-submodule/${localCommit}`
+      await assert.rejects(
+        getSubmodulesToPush(repository),
+        /contains remote changes that are not included/
       )
     })
 
-    it('publishes an unavailable detached commit as a tag', async t => {
-      const testRepoPath = await setupFixtureRepository(
-        t,
-        'submodule-basic-setup'
-      )
-      const repository = new Repository(testRepoPath, -1, null, false)
-      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
-
-      await writeFile(path.join(submodulePath, 'README.md'), 'detached change')
-      await exec(['commit', '-am', 'detached submodule commit'], submodulePath)
-      const head = (await exec(['rev-parse', 'HEAD'], submodulePath)).stdout.trim()
-      await exec(['tag', 'local-only-tag', head], submodulePath)
-      await exec(['checkout', '--detach', head], submodulePath)
-
-      const result = await getSubmodulesToPush(repository)
-      assert.equal(result.length, 1)
-      assert.equal(result[0].path, 'foo/submodule')
-      assert.equal(result[0].branchName, head)
-      assert.equal(
-        result[0].remoteBranchName,
-        `refs/tags/desktop-submodule/${head}`
-      )
-    })
-
-    it('skips a detached commit already available from its remote', async t => {
-      const testRepoPath = await setupFixtureRepository(
-        t,
-        'submodule-basic-setup'
-      )
-      const repository = new Repository(testRepoPath, -1, null, false)
-      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
-      const head = (await exec(['rev-parse', 'HEAD'], submodulePath)).stdout.trim()
-
-      await exec(['checkout', '--detach', head], submodulePath)
-
-      const result = await getSubmodulesToPush(repository)
-      assert.equal(result.length, 0)
-    })
-
-    it('skips a detached commit available only through a remote tag', async t => {
+    it('does not treat a synthetic remote tag as branch publication', async t => {
       const testRepoPath = await setupFixtureRepository(
         t,
         'submodule-basic-setup'
@@ -242,22 +279,23 @@ describe('git/submodule', () => {
 
       await exec(['init', '--bare'], remotePath)
       await exec(['remote', 'set-url', 'origin', remotePath], submodulePath)
+      await exec(['push', '-u', 'origin', 'master'], submodulePath)
 
       await writeFile(path.join(submodulePath, 'README.md'), 'tagged change')
       await exec(['commit', '-am', 'tagged submodule commit'], submodulePath)
-      const head = (await exec(['rev-parse', 'HEAD'], submodulePath)).stdout.trim()
+      const head = (
+        await exec(['rev-parse', 'HEAD'], submodulePath)
+      ).stdout.trim()
       await exec(
-        [
-          'push',
-          'origin',
-          `${head}:refs/tags/desktop-submodule/${head}`,
-        ],
+        ['push', 'origin', `${head}:refs/tags/desktop-submodule/${head}`],
         submodulePath
       )
       await exec(['checkout', '--detach', head], submodulePath)
 
       const result = await getSubmodulesToPush(repository)
-      assert.equal(result.length, 0)
+      assert.equal(result.length, 1)
+      assert.equal(result[0].branchName, head)
+      assert.equal(result[0].remoteBranchName, 'master')
     })
 
     it('checks the gitlink recorded in the parent commit instead of the submodule checkout', async t => {
@@ -269,11 +307,13 @@ describe('git/submodule', () => {
       const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
 
       await writeFile(path.join(submodulePath, 'README.md'), 'unpublished')
-      await exec(['commit', '-am', 'unpublished submodule commit'], submodulePath)
-      const unpublishedCommit = (
+      await exec(
+        ['commit', '-am', 'unpublished submodule commit'],
+        submodulePath
+      )
+      const recordedCommit = (
         await exec(['rev-parse', 'HEAD'], submodulePath)
       ).stdout.trim()
-
       await exec(['add', 'foo/submodule'], testRepoPath)
       await exec(['commit', '-m', 'record unpublished gitlink'], testRepoPath)
       const parentCommit = (
@@ -288,12 +328,8 @@ describe('git/submodule', () => {
         parentCommit
       )
       assert.equal(result.length, 1)
-      assert.equal(result[0].path, 'foo/submodule')
-      assert.equal(result[0].branchName, unpublishedCommit)
-      assert.equal(
-        result[0].remoteBranchName,
-        `refs/tags/desktop-submodule/${unpublishedCommit}`
-      )
+      assert.equal(result[0].branchName, recordedCommit)
+      assert.equal(result[0].remoteBranchName, 'master')
     })
 
     it('fails closed when a gitlink in the parent commit is not initialized', async t => {
@@ -314,7 +350,7 @@ describe('git/submodule', () => {
       )
     })
 
-    it('skips an unchanged uninitialized descendant recorded in remote parent history', async t => {
+    it('skips a proven descendant before requiring intervention for its diverged parent', async t => {
       const testRepoPath = await setupFixtureRepository(
         t,
         'submodule-basic-setup'
@@ -384,14 +420,9 @@ describe('git/submodule', () => {
         await exec(['rev-parse', 'HEAD'], testRepoPath)
       ).stdout.trim()
 
-      const result = await getSubmodulesToPush(
-        repository,
-        undefined,
-        parentCommit
-      )
-      assert.deepEqual(
-        result.map(x => x.path),
-        ['foo/submodule']
+      await assert.rejects(
+        getSubmodulesToPush(repository, undefined, parentCommit),
+        /has diverged from origin\/master/
       )
     })
 
@@ -466,9 +497,15 @@ describe('git/submodule', () => {
       )
       await exec(['add', '.'], nestedPath)
       await exec(['commit', '-m', 'update nested submodule'], nestedPath)
-      await exec(['commit', '-am', 'update nested submodule pointer'], submodulePath)
+      await exec(
+        ['commit', '-am', 'update nested submodule pointer'],
+        submodulePath
+      )
       await exec(['add', 'foo/submodule'], testRepoPath)
-      await exec(['commit', '-m', 'update parent submodule pointer'], testRepoPath)
+      await exec(
+        ['commit', '-m', 'update parent submodule pointer'],
+        testRepoPath
+      )
       const parentCommit = (
         await exec(['rev-parse', 'HEAD'], testRepoPath)
       ).stdout.trim()

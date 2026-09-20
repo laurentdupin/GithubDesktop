@@ -25,10 +25,8 @@ describe('git/submodule-working-directory', () => {
     const repoPath = await setupFixtureRepository(t, 'submodule-basic-setup')
     const repository = new Repository(repoPath, -1, null, false)
 
-    const submoduleWorkingDirectory = await getSubmoduleRepositoryWorkingDirectory(
-      repository,
-      'foo/submodule'
-    )
+    const submoduleWorkingDirectory =
+      await getSubmoduleRepositoryWorkingDirectory(repository, 'foo/submodule')
 
     assert.equal(submoduleWorkingDirectory, null)
   })
@@ -125,9 +123,15 @@ describe('git/submodule-working-directory', () => {
     assert(isSyntheticSubmoduleChange(nestedFile))
     assert.equal(nestedSubmodule.submoduleChange.depth, 1)
     assert.equal(nestedFile.submoduleChange.depth, 2)
-    assert.equal(nestedFile.submoduleChange.submodulePath, 'foo/submodule/nested')
+    assert.equal(
+      nestedFile.submoduleChange.submodulePath,
+      'foo/submodule/nested'
+    )
     assert.equal(nestedFile.submoduleChange.submoduleRepositoryPath, nestedPath)
-    assert.equal(nestedFile.submoduleChange.pathInSubmodule, 'nested-change.txt')
+    assert.equal(
+      nestedFile.submoduleChange.pathInSubmodule,
+      'nested-change.txt'
+    )
 
     const repositoryChange = toSubmoduleRepositoryChange(nestedFile)
     assert.equal(repositoryChange.repository.path, nestedPath)

@@ -147,6 +147,7 @@ import {
   ICopilotResolutionSummary,
 } from '../../lib/copilot-conflict-resolution'
 import { WorktreeEntry } from '../../models/worktree'
+import { ISubmoduleUpdateEntry } from '../../models/submodule-update'
 
 /**
  * An error handler function.
@@ -443,6 +444,39 @@ export class Dispatcher {
     repository: Repository
   ): Promise<ReadonlyArray<IForkSyncPreviewEntry>> {
     return this.appStore._loadForkSyncPreview(repository)
+  }
+
+  public showSubmoduleUpdatePreview(
+    repository: Repository,
+    fetchRemotes: boolean
+  ): Promise<void> {
+    return this.showPopup({
+      type: PopupType.SubmoduleUpdatePreview,
+      repository,
+      fetchRemotes,
+    })
+  }
+
+  public loadSubmoduleUpdatePreview(
+    repository: Repository,
+    fetchRemotes: boolean
+  ): Promise<ReadonlyArray<ISubmoduleUpdateEntry>> {
+    return this.appStore._loadSubmoduleUpdatePreview(
+      repository,
+      fetchRemotes,
+      !fetchRemotes
+    )
+  }
+
+  public applySubmoduleUpdates(
+    repository: Repository,
+    entries: ReadonlyArray<ISubmoduleUpdateEntry>
+  ): Promise<void> {
+    return this.appStore._applySubmoduleUpdates(repository, entries)
+  }
+
+  public markSubmoduleUpdatePreviewViewed(repository: Repository): void {
+    this.appStore._markSubmoduleUpdatePreviewViewed(repository)
   }
 
   /**
@@ -2976,7 +3010,10 @@ export class Dispatcher {
     try {
       return await fn()
     } catch (error) {
-      log.error(`[shelf] ${action.kind} action failed for ${action.shelfId}`, error)
+      log.error(
+        `[shelf] ${action.kind} action failed for ${action.shelfId}`,
+        error
+      )
       throw error
     } finally {
       this.appStore._setShelfActionInProgress(repository, null)
@@ -4231,8 +4268,7 @@ export class Dispatcher {
     }
 
     const remainingEntries = previewEntries.filter(
-      entry =>
-        entry.status === 'needs-sync' || entry.status === 'conflicts'
+      entry => entry.status === 'needs-sync' || entry.status === 'conflicts'
     )
 
     if (remainingEntries.length === 0) {
@@ -4333,9 +4369,8 @@ export class Dispatcher {
   }
 
   private getForkSyncContext(repository: Repository): IForkSyncContext | null {
-    const { multiCommitOperationState } = this.repositoryStateManager.get(
-      repository
-    )
+    const { multiCommitOperationState } =
+      this.repositoryStateManager.get(repository)
 
     if (
       multiCommitOperationState === null ||
@@ -4378,8 +4413,7 @@ export class Dispatcher {
 
     const localBranch = allBranches.find(
       branch =>
-        branch.type === BranchType.Local &&
-        branch.ref === currentEntry.localRef
+        branch.type === BranchType.Local && branch.ref === currentEntry.localRef
     )
     const upstreamBranch = allBranches.find(
       branch => branch.ref === currentEntry.upstreamRef

@@ -14,7 +14,6 @@ import { IRemote } from '../../models/remote'
 import { Progress } from '../../models/progress'
 import { getStatus } from './status'
 import { getRemotes } from './remote'
-import { getAheadBehind, revSymmetricDifference } from './rev-list'
 
 export type SubmodulePushContext = {
   readonly path: string
@@ -46,31 +45,11 @@ function createSubmoduleRepository(path: string) {
   return new Repository(path, -1, null, false)
 }
 
-async function shouldPushSubmodule(
-  repository: Repository,
-  currentBranch: string,
-  remote: IRemote,
-  remoteBranchName: string | null,
-  branchAheadBehind: { ahead: number; behind: number } | undefined
-) {
-  if (branchAheadBehind !== undefined) {
-    return branchAheadBehind.ahead > 0
-  }
-
-  const remoteBranchRef =
-    remoteBranchName === null
-      ? `${remote.name}/${currentBranch}`
-      : `${remote.name}/${remoteBranchName}`
-
-  const aheadBehind = await getAheadBehind(
-    repository,
-    revSymmetricDifference(currentBranch, remoteBranchRef)
-  )
-
-  return aheadBehind === null || aheadBehind.ahead > 0
-}
-
-type SubmoduleBranchPublishStrategy = 'available' | 'branch' | 'tag'
+type SubmoduleBranchPublishStrategy =
+  | 'available'
+  | 'push'
+  | 'remote-ahead'
+  | 'diverged'
 
 async function getSubmoduleBranchPublishStrategy(
   repository: Repository,
@@ -90,7 +69,7 @@ async function getSubmoduleBranchPublishStrategy(
   )
   const advertisedSha = advertisedBranch.split('\t')[0]
   if (advertisedSha.length === 0) {
-    return 'branch'
+    return 'push'
   }
 
   const objectCheck = await git(
@@ -124,7 +103,7 @@ async function getSubmoduleBranchPublishStrategy(
     { successExitCodes: new Set([0, 1, 128]) }
   )
   if (localIsPublished.exitCode === 0) {
-    return 'available'
+    return commitSha === advertisedSha ? 'available' : 'remote-ahead'
   }
 
   const branchCanFastForward = await git(
@@ -133,94 +112,75 @@ async function getSubmoduleBranchPublishStrategy(
     'verifySubmoduleBranchCanFastForward',
     { successExitCodes: new Set([0, 1, 128]) }
   )
-  return branchCanFastForward.exitCode === 0 ? 'branch' : 'tag'
+  return branchCanFastForward.exitCode === 0 ? 'push' : 'diverged'
 }
 
-async function isCommitAvailableOnRemote(
-  repository: Repository,
-  remote: IRemote,
-  commitSha: string
-) {
-  const { stdout: remoteBranches } = await git(
+async function getConfiguredSubmoduleBranches(repository: Repository) {
+  const branches = new Map<string, string>()
+  if (!(await pathExists(join(repository.path, '.gitmodules')))) {
+    return branches
+  }
+
+  const { stdout: paths } = await git(
     [
-      'for-each-ref',
-      '--contains',
-      commitSha,
-      '--format=%(refname)',
-      `refs/remotes/${remote.name}/`,
+      'config',
+      '--file',
+      '.gitmodules',
+      '--get-regexp',
+      '^submodule\\..*\\.path$',
     ],
     repository.path,
-    'isSubmoduleCommitAvailableOnRemote'
+    'getSubmodulePathsForPush',
+    { successExitCodes: new Set([0, 1]) }
   )
+  const { stdout: configuredBranches } = await git(
+    [
+      'config',
+      '--file',
+      '.gitmodules',
+      '--get-regexp',
+      '^submodule\\..*\\.branch$',
+    ],
+    repository.path,
+    'getSubmoduleBranchesForPush',
+    { successExitCodes: new Set([0, 1]) }
+  )
+  const pathsByName = new Map<string, string>()
 
-  const remoteBranchRefs = remoteBranches
-    .split('\n')
-    .map(ref => ref.trim())
-    .filter(ref => ref.length > 0 && !ref.endsWith('/HEAD'))
-    .map(ref =>
-      ref.replace(`refs/remotes/${remote.name}/`, 'refs/heads/')
-    )
-
-  if (remoteBranchRefs.length > 0) {
-    const { stdout: advertisedBranches } = await git(
-      ['ls-remote', '--heads', remote.name, ...remoteBranchRefs],
-      repository.path,
-      'verifyRemoteSubmoduleBranches',
-      {
-        env: await envForRemoteOperation(remote.url),
-        expectedErrors: AuthenticationErrors,
-      }
-    )
-
-    for (const line of advertisedBranches.split('\n')) {
-      const [tip] = line.split('\t')
-      if (tip === commitSha) {
-        return true
-      }
-
-      if (tip?.length > 0) {
-        const result = await git(
-          ['merge-base', '--is-ancestor', commitSha, tip],
-          repository.path,
-          'verifySubmoduleCommitAncestor',
-          { successExitCodes: new Set([0, 1, 128]) }
-        )
-
-        if (result.exitCode === 0) {
-          return true
-        }
-      }
+  for (const line of paths.split('\n')) {
+    const match = /^submodule\.(.+)\.path (.+)$/.exec(line.trim())
+    if (match !== null) {
+      pathsByName.set(match[1], match[2])
     }
   }
 
-  const { stdout: localTags } = await git(
-    ['tag', '--points-at', commitSha],
+  for (const line of configuredBranches.split('\n')) {
+    const match = /^submodule\.(.+)\.branch (.+)$/.exec(line.trim())
+    const path = match === null ? undefined : pathsByName.get(match[1])
+    if (match !== null && path !== undefined) {
+      branches.set(path, match[2])
+    }
+  }
+
+  return branches
+}
+
+async function getRemoteDefaultBranch(
+  repository: Repository,
+  remote: IRemote
+): Promise<string | undefined> {
+  const { stdout } = await git(
+    ['ls-remote', '--symref', remote.name, 'HEAD'],
     repository.path,
-    'getSubmoduleCommitTags'
-  )
-  const tagNames = localTags.split('\n').filter(x => x.length > 0)
-  const syntheticTag = `refs/tags/desktop-submodule/${commitSha}`
-  const tagRefs = [
-    syntheticTag,
-    `${syntheticTag}^{}`,
-    ...tagNames.flatMap(tagName => [
-      `refs/tags/${tagName}`,
-      `refs/tags/${tagName}^{}`,
-    ]),
-  ]
-  const { stdout: remoteTags } = await git(
-    ['ls-remote', '--tags', remote.name, ...tagRefs],
-    repository.path,
-    'getRemoteSubmoduleCommitTags',
+    'getRemoteSubmoduleDefaultBranch',
     {
       env: await envForRemoteOperation(remote.url),
       expectedErrors: AuthenticationErrors,
     }
   )
 
-  return remoteTags
-    .split('\n')
-    .some(line => line.startsWith(`${commitSha}\t`))
+  const match = /^ref: refs\/heads\/(.+)\tHEAD$/m.exec(stdout)
+  return match?.[1]
 }
 
 function gitlinkKey(path: string, sha: string) {
@@ -363,9 +323,8 @@ async function getGitlinksRecordedOnRemoteTips(repository: Repository) {
       for (let index = 0; index + 1 < entries.length; index += 2) {
         const metadata = entries[index]
         const path = entries[index + 1]
-        const match = /^:[0-7]{6} 160000 [0-9a-f]{40} ([0-9a-f]{40}) [A-Z]$/.exec(
-          metadata
-        )
+        const match =
+          /^:[0-7]{6} 160000 [0-9a-f]{40} ([0-9a-f]{40}) [A-Z]$/.exec(metadata)
         if (match !== null) {
           gitlinks.add(gitlinkKey(path, match[1]))
         }
@@ -572,6 +531,7 @@ export async function getSubmodulesToPush(
   const visitedRepositoryPaths = new Set<string>([
     normalizeSubmoduleRepositoryPath(repository.path),
   ])
+  const rootStatus = await getStatus(repository)
 
   await collectSubmodulesToPush(
     repository,
@@ -579,7 +539,8 @@ export async function getSubmodulesToPush(
     candidatePaths,
     visitedRepositoryPaths,
     pushableSubmodules,
-    commitSha
+    commitSha,
+    rootStatus?.currentBranch
   )
 
   return pushableSubmodules
@@ -596,13 +557,15 @@ async function collectSubmodulesToPush(
   candidatePaths: ReadonlySet<string> | undefined,
   visitedRepositoryPaths: Set<string>,
   pushableSubmodules: Array<SubmodulePushContext>,
-  commitSha?: string
+  commitSha?: string,
+  repositoryBranchName?: string
 ): Promise<void> {
   const submodules =
     commitSha === undefined
       ? await listSubmodules(repository)
       : await listSubmodulesAtCommit(repository, commitSha)
   let remoteTipGitlinks: ReadonlySet<string> | undefined
+  const configuredBranches = await getConfiguredSubmoduleBranches(repository)
 
   for (const submodule of submodules) {
     if (candidatePaths !== undefined && !candidatePaths.has(submodule.path)) {
@@ -636,7 +599,9 @@ async function collectSubmodulesToPush(
 
     visitedRepositoryPaths.add(normalizedPath)
 
-    const submoduleRepository = createSubmoduleRepository(submoduleRepositoryPath)
+    const submoduleRepository = createSubmoduleRepository(
+      submoduleRepositoryPath
+    )
     const displayPath = parentPath
       ? `${parentPath}/${submodule.path}`
       : submodule.path
@@ -669,7 +634,7 @@ async function collectSubmodulesToPush(
 
     const remotes = await getRemotes(submoduleRepository)
     let remote: IRemote | null = null
-    let remoteBranchName: string | null = null
+    let upstreamBranchName: string | undefined
 
     if (
       status.currentBranch !== undefined &&
@@ -687,7 +652,7 @@ async function collectSubmodulesToPush(
       }
 
       remote = remotes.find(r => r.name === upstream.remoteName) ?? null
-      remoteBranchName = upstream.branchName
+      upstreamBranchName = upstream.branchName
     } else {
       remote = findDefaultRemote(remotes)
     }
@@ -705,14 +670,39 @@ async function collectSubmodulesToPush(
     const referencedCommit =
       commitSha === undefined ? status.currentTip : submodule.sha
 
-    if (
-      await isCommitAvailableOnRemote(
-        submoduleRepository,
-        remote,
-        referencedCommit
+    const configuredBranch = configuredBranches.get(submodule.path)
+    const resolvedConfiguredBranch =
+      configuredBranch === '.' ? repositoryBranchName : configuredBranch
+    const remoteBranchName =
+      upstreamBranchName ??
+      resolvedConfiguredBranch ??
+      status.currentBranch ??
+      (await getRemoteDefaultBranch(submoduleRepository, remote))
+
+    if (remoteBranchName === undefined) {
+      throw new Error(
+        `Unable to publish submodule "${displayPath}" because its remote branch could not be determined. Configure its branch in .gitmodules before pushing the parent repository.`
       )
-    ) {
+    }
+
+    const publishStrategy = await getSubmoduleBranchPublishStrategy(
+      submoduleRepository,
+      remote,
+      remoteBranchName,
+      referencedCommit
+    )
+    if (publishStrategy === 'available') {
       continue
+    }
+    if (publishStrategy === 'remote-ahead') {
+      throw new Error(
+        `Unable to publish submodule "${displayPath}" because ${remote.name}/${remoteBranchName} contains remote changes that are not included in commit ${referencedCommit}. Merge or update the submodule before pushing the parent repository.`
+      )
+    }
+    if (publishStrategy === 'diverged') {
+      throw new Error(
+        `Unable to publish submodule "${displayPath}" because commit ${referencedCommit} has diverged from ${remote.name}/${remoteBranchName}. Merge the remote changes in the submodule before pushing the parent repository.`
+      )
     }
 
     // The referenced parent commit is not available remotely, so publish any
@@ -725,58 +715,15 @@ async function collectSubmodulesToPush(
       undefined,
       visitedRepositoryPaths,
       pushableSubmodules,
-      referencedCommit
+      referencedCommit,
+      remoteBranchName
     )
-
-    if (status.currentBranch === undefined || status.currentTip !== referencedCommit) {
-      pushableSubmodules.push({
-        path: displayPath,
-        repository: submoduleRepository,
-        remote,
-        branchName: referencedCommit,
-        remoteBranchName: `refs/tags/desktop-submodule/${referencedCommit}`,
-      })
-      continue
-    }
-
-    const publishStrategy = await getSubmoduleBranchPublishStrategy(
-      submoduleRepository,
-      remote,
-      remoteBranchName ?? status.currentBranch,
-      referencedCommit
-    )
-    if (publishStrategy === 'available') {
-      continue
-    }
-    if (publishStrategy === 'tag') {
-      pushableSubmodules.push({
-        path: displayPath,
-        repository: submoduleRepository,
-        remote,
-        branchName: referencedCommit,
-        remoteBranchName: `refs/tags/desktop-submodule/${referencedCommit}`,
-      })
-      continue
-    }
-
-    if (
-      commitSha === undefined &&
-      !(await shouldPushSubmodule(
-        submoduleRepository,
-        status.currentBranch,
-        remote,
-        remoteBranchName,
-        status.branchAheadBehind
-      ))
-    ) {
-      continue
-    }
 
     pushableSubmodules.push({
       path: displayPath,
       repository: submoduleRepository,
       remote,
-      branchName: status.currentBranch,
+      branchName: referencedCommit,
       remoteBranchName,
     })
   }
