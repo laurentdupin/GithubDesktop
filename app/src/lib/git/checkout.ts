@@ -25,6 +25,142 @@ function getCheckoutArgs(progressCallback?: ProgressCallback) {
   return ['checkout', ...(progressCallback ? ['--progress'] : [])]
 }
 
+interface IRawTreeChange {
+  readonly oldMode: string
+  readonly newMode: string
+  readonly path: string
+}
+
+async function getSubmodulesReplacedByFiles(
+  repository: Repository,
+  target: string
+): Promise<ReadonlyArray<string>> {
+  const resolvedTarget = await git(
+    ['rev-parse', '--verify', `${target}^{commit}`],
+    repository.path,
+    'resolveSubmoduleCheckoutTarget',
+    { successExitCodes: new Set([0, 1, 128]) }
+  )
+
+  // Leave invalid-reference reporting to checkout so callers receive the same
+  // error they did before this preparation step was added.
+  if (resolvedTarget.exitCode !== 0) {
+    return []
+  }
+
+  const { stdout } = await git(
+    [
+      'diff',
+      '--raw',
+      '-z',
+      '--no-renames',
+      '--diff-filter=DT',
+      'HEAD',
+      target,
+      '--',
+    ],
+    repository.path,
+    'getSubmodulesReplacedByFiles'
+  )
+  const fields = stdout.split('\0')
+  const changes = new Array<IRawTreeChange>()
+
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const match = /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ [A-Z]$/.exec(fields[i])
+
+    if (match !== null) {
+      changes.push({
+        oldMode: match[1],
+        newMode: match[2],
+        path: fields[i + 1],
+      })
+    }
+  }
+
+  const changedSubmodules = changes.filter(
+    change => change.oldMode === '160000' && change.newMode !== '160000'
+  )
+
+  const replaced = await Promise.all(
+    changedSubmodules.map(async change => {
+      if (change.newMode !== '000000') {
+        return change.path
+      }
+
+      const targetEntry = await git(
+        ['ls-tree', '-z', target, '--', change.path],
+        repository.path,
+        'getSubmoduleReplacementTarget'
+      )
+
+      return targetEntry.stdout.length > 0 ? change.path : null
+    })
+  )
+
+  return replaced.filter((path): path is string => path !== null)
+}
+
+async function restoreDeinitializedSubmodules(
+  repository: Repository,
+  paths: ReadonlyArray<string>,
+  opts: IGitStringExecutionOptions,
+  allowFileProtocol: boolean
+) {
+  if (paths.length === 0) {
+    return
+  }
+
+  const args = [
+    ...(allowFileProtocol ? ['-c', 'protocol.file.allow=always'] : []),
+    'submodule',
+    'update',
+    '--init',
+    '--recursive',
+    '--',
+    ...paths,
+  ]
+
+  await git(args, repository.path, 'restoreDeinitializedSubmodules', opts)
+}
+
+async function deinitializeSubmodulesReplacedByFiles(
+  repository: Repository,
+  target: string,
+  opts: IGitStringExecutionOptions,
+  allowFileProtocol: boolean
+) {
+  const paths = await getSubmodulesReplacedByFiles(repository, target)
+  const deinitialized = new Array<string>()
+
+  try {
+    for (const path of paths) {
+      // Deliberately omit --force so Git refuses to remove a dirty submodule.
+      await git(
+        ['submodule', 'deinit', '--', path],
+        repository.path,
+        'deinitializeReplacedSubmodule',
+        opts
+      )
+      deinitialized.push(path)
+    }
+  } catch (error) {
+    await restoreDeinitializedSubmodules(
+      repository,
+      deinitialized,
+      opts,
+      allowFileProtocol
+    ).catch(restoreError =>
+      log.warn(
+        'Failed to restore submodules after checkout preparation',
+        restoreError
+      )
+    )
+    throw error
+  }
+
+  return deinitialized
+}
+
 async function getBranchCheckoutArgs(branch: Branch) {
   return [
     branch.name,
@@ -120,8 +256,29 @@ export async function checkoutBranch(
 
   const baseArgs = getCheckoutArgs(progressCallback)
   const args = [...baseArgs, ...(await getBranchCheckoutArgs(branch))]
+  const deinitializedSubmodules = await deinitializeSubmodulesReplacedByFiles(
+    repository,
+    branch.name,
+    opts,
+    allowFileProtocol
+  )
 
-  await git(args, repository.path, 'checkoutBranch', opts)
+  try {
+    await git(args, repository.path, 'checkoutBranch', opts)
+  } catch (error) {
+    await restoreDeinitializedSubmodules(
+      repository,
+      deinitializedSubmodules,
+      opts,
+      allowFileProtocol
+    ).catch(restoreError =>
+      log.warn(
+        'Failed to restore submodules after checkout failure',
+        restoreError
+      )
+    )
+    throw error
+  }
 
   // Update submodules after checkout
   await updateSubmodulesAfterOperation(

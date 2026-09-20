@@ -17,6 +17,7 @@ import { getStatusOrThrow } from '../../helpers/status'
 import { exec } from 'dugite'
 import { TestStatsStore } from '../../helpers/test-stats-store'
 import { pathExists } from '../../../src/lib/path-exists'
+import { mkdir, readFile, writeFile } from 'fs/promises'
 
 describe('git/checkout', () => {
   it('throws when invalid characters are used for branch name', async t => {
@@ -127,6 +128,54 @@ describe('git/checkout', () => {
   })
 
   describe('with submodules', () => {
+    it('can replace a clean submodule with files from another branch', async t => {
+      const repository = await setupEmptyRepository(t)
+      const submodule = await setupEmptyRepository(t)
+
+      await writeFile(Path.join(submodule.path, 'file.txt'), 'submodule')
+      await exec(['add', 'file.txt'], submodule.path)
+      await exec(['commit', '-m', 'Initial commit'], submodule.path)
+
+      const modulePath = Path.join(repository.path, 'module')
+      await mkdir(modulePath)
+      await writeFile(Path.join(modulePath, 'file.txt'), 'regular file')
+      await exec(['add', 'module/file.txt'], repository.path)
+      await exec(['commit', '-m', 'Add regular directory'], repository.path)
+      await exec(['branch', 'regular-directory'], repository.path)
+
+      await exec(['rm', '-r', 'module'], repository.path)
+      await exec(
+        [
+          '-c',
+          'protocol.file.allow=always',
+          'submodule',
+          'add',
+          submodule.path,
+          'module',
+        ],
+        repository.path
+      )
+      await exec(
+        ['commit', '-m', 'Replace directory with submodule'],
+        repository.path
+      )
+
+      const branches = await getBranches(repository)
+      const regularDirectory = branches.find(
+        branch => branch.name === 'regular-directory'
+      )
+
+      assert.ok(regularDirectory !== undefined)
+      await checkoutBranch(repository, regularDirectory, null)
+
+      assert.equal(
+        await readFile(Path.join(modulePath, 'file.txt'), 'utf8'),
+        'regular file'
+      )
+      const status = await getStatusOrThrow(repository)
+      assert.equal(status.workingDirectory.files.length, 0)
+    })
+
     it('updates a changed submodule reference', async t => {
       const path = await setupFixtureRepository(t, 'test-submodule-checkouts')
       const repository = new Repository(path, -1, null, false)
