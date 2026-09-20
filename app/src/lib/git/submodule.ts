@@ -51,12 +51,17 @@ type SubmoduleBranchPublishStrategy =
   | 'remote-ahead'
   | 'diverged'
 
+type SubmoduleBranchPublishComparison = {
+  readonly strategy: SubmoduleBranchPublishStrategy
+  readonly remoteTip?: string
+}
+
 async function getSubmoduleBranchPublishStrategy(
   repository: Repository,
   remote: IRemote,
   branchName: string,
   commitSha: string
-): Promise<SubmoduleBranchPublishStrategy> {
+): Promise<SubmoduleBranchPublishComparison> {
   const remoteBranchRef = `refs/heads/${branchName}`
   const { stdout: advertisedBranch } = await git(
     ['ls-remote', '--heads', remote.name, remoteBranchRef],
@@ -69,7 +74,7 @@ async function getSubmoduleBranchPublishStrategy(
   )
   const advertisedSha = advertisedBranch.split('\t')[0]
   if (advertisedSha.length === 0) {
-    return 'push'
+    return { strategy: 'push' }
   }
 
   const objectCheck = await git(
@@ -103,7 +108,10 @@ async function getSubmoduleBranchPublishStrategy(
     { successExitCodes: new Set([0, 1, 128]) }
   )
   if (localIsPublished.exitCode === 0) {
-    return commitSha === advertisedSha ? 'available' : 'remote-ahead'
+    return {
+      strategy: commitSha === advertisedSha ? 'available' : 'remote-ahead',
+      remoteTip: advertisedSha,
+    }
   }
 
   const branchCanFastForward = await git(
@@ -112,7 +120,10 @@ async function getSubmoduleBranchPublishStrategy(
     'verifySubmoduleBranchCanFastForward',
     { successExitCodes: new Set([0, 1, 128]) }
   )
-  return branchCanFastForward.exitCode === 0 ? 'push' : 'diverged'
+  return {
+    strategy: branchCanFastForward.exitCode === 0 ? 'push' : 'diverged',
+    remoteTip: advertisedSha,
+  }
 }
 
 async function getConfiguredSubmoduleBranches(repository: Repository) {
@@ -183,156 +194,15 @@ async function getRemoteDefaultBranch(
   return match?.[1]
 }
 
-function gitlinkKey(path: string, sha: string) {
-  return `${path}\0${sha}`
-}
+async function resolveCommit(repository: Repository, ref: string) {
+  const { stdout, exitCode } = await git(
+    ['rev-parse', '--verify', `${ref}^{commit}`],
+    repository.path,
+    'resolveSubmodulePushBaseline',
+    { successExitCodes: new Set([0, 128]) }
+  )
 
-/**
- * Find gitlinks which are already recorded by the reachable history of the
- * verified tips of configured remote branches. An unchanged, uninitialized
- * child does not need to be traversed again when publishing a newer parent
- * commit: the remote parent history already proves that exact gitlink was
- * published previously.
- *
- * The server-advertised branch tips are inspected directly. A matching local
- * remote-tracking ref can be used as-is; otherwise the advertised tip is
- * fetched without updating the user's refs when its object is not available
- * locally. A stale or rewritten tracking ref must not weaken the push safety
- * check or prevent an unchanged child from being recognized.
- */
-async function getGitlinksRecordedOnRemoteTips(repository: Repository) {
-  const gitlinks = new Set<string>()
-  const remotes = await getRemotes(repository)
-
-  for (const remote of remotes) {
-    const remoteTrackingPrefix = `refs/remotes/${remote.name}/`
-    const { stdout: localRemoteBranches } = await git(
-      [
-        'for-each-ref',
-        '--format=%(objectname) %(refname)',
-        remoteTrackingPrefix,
-      ],
-      repository.path,
-      'getLocalRemoteBranchesForSubmodulePush'
-    )
-
-    const localTips = new Map<string, { sha: string; localRef: string }>()
-    for (const line of localRemoteBranches.split('\n')) {
-      const separatorIndex = line.indexOf(' ')
-      if (separatorIndex === -1) {
-        continue
-      }
-
-      const sha = line.slice(0, separatorIndex)
-      const localRef = line.slice(separatorIndex + 1)
-      if (localRef.endsWith('/HEAD')) {
-        continue
-      }
-
-      const branchName = localRef.slice(remoteTrackingPrefix.length)
-      localTips.set(`refs/heads/${branchName}`, { sha, localRef })
-    }
-
-    if (localTips.size === 0) {
-      continue
-    }
-
-    const { stdout: advertisedBranches } = await git(
-      ['ls-remote', '--heads', remote.name, ...localTips.keys()],
-      repository.path,
-      'verifyRemoteParentBranchesForSubmodulePush',
-      {
-        env: await envForRemoteOperation(remote.url),
-        expectedErrors: AuthenticationErrors,
-      }
-    )
-
-    for (const line of advertisedBranches.split('\n')) {
-      const [advertisedSha, remoteRef] = line.split('\t')
-      const localTip =
-        remoteRef === undefined ? undefined : localTips.get(remoteRef)
-      if (
-        advertisedSha === undefined ||
-        advertisedSha.length === 0 ||
-        remoteRef === undefined
-      ) {
-        continue
-      }
-
-      let tipToInspect = localTip?.localRef
-      if (localTip?.sha !== advertisedSha) {
-        const objectCheck = await git(
-          ['cat-file', '-e', `${advertisedSha}^{commit}`],
-          repository.path,
-          'verifyAdvertisedParentTipForSubmodulePush',
-          { successExitCodes: new Set([0, 1, 128]) }
-        )
-
-        if (objectCheck.exitCode !== 0) {
-          await git(
-            [
-              'fetch',
-              '--no-tags',
-              '--no-write-fetch-head',
-              remote.name,
-              remoteRef,
-            ],
-            repository.path,
-            'fetchAdvertisedParentTipForSubmodulePush',
-            {
-              env: await envForRemoteOperation(remote.url),
-              expectedErrors: AuthenticationErrors,
-            }
-          )
-        }
-
-        const fetchedObjectCheck = await git(
-          ['cat-file', '-e', `${advertisedSha}^{commit}`],
-          repository.path,
-          'verifyFetchedParentTipForSubmodulePush',
-          { successExitCodes: new Set([0, 1, 128]) }
-        )
-        if (fetchedObjectCheck.exitCode !== 0) {
-          continue
-        }
-
-        tipToInspect = advertisedSha
-      }
-
-      if (tipToInspect === undefined) {
-        continue
-      }
-
-      const { stdout: history } = await git(
-        [
-          'log',
-          '-m',
-          '--format=',
-          '--raw',
-          '-z',
-          '--root',
-          '--no-renames',
-          '--no-abbrev',
-          tipToInspect,
-          '--',
-        ],
-        repository.path,
-        'getRemoteParentGitlinkHistoryForSubmodulePush'
-      )
-      const entries = history.split('\0')
-      for (let index = 0; index + 1 < entries.length; index += 2) {
-        const metadata = entries[index]
-        const path = entries[index + 1]
-        const match =
-          /^:[0-7]{6} 160000 [0-9a-f]{40} ([0-9a-f]{40}) [A-Z]$/.exec(metadata)
-        if (match !== null) {
-          gitlinks.add(gitlinkKey(path, match[1]))
-        }
-      }
-    }
-  }
-
-  return gitlinks
+  return exitCode === 0 ? stdout.trim() : undefined
 }
 
 /**
@@ -532,6 +402,10 @@ export async function getSubmodulesToPush(
     normalizeSubmoduleRepositoryPath(repository.path),
   ])
   const rootStatus = await getStatus(repository)
+  const baselineCommitSha =
+    commitSha !== undefined && rootStatus?.currentUpstreamBranch !== undefined
+      ? await resolveCommit(repository, rootStatus.currentUpstreamBranch)
+      : undefined
 
   await collectSubmodulesToPush(
     repository,
@@ -540,7 +414,8 @@ export async function getSubmodulesToPush(
     visitedRepositoryPaths,
     pushableSubmodules,
     commitSha,
-    rootStatus?.currentBranch
+    rootStatus?.currentBranch,
+    baselineCommitSha
   )
 
   return pushableSubmodules
@@ -558,13 +433,20 @@ async function collectSubmodulesToPush(
   visitedRepositoryPaths: Set<string>,
   pushableSubmodules: Array<SubmodulePushContext>,
   commitSha?: string,
-  repositoryBranchName?: string
+  repositoryBranchName?: string,
+  baselineCommitSha?: string
 ): Promise<void> {
   const submodules =
     commitSha === undefined
       ? await listSubmodules(repository)
       : await listSubmodulesAtCommit(repository, commitSha)
-  let remoteTipGitlinks: ReadonlySet<string> | undefined
+  const baselineSubmodules =
+    baselineCommitSha === undefined
+      ? []
+      : await listSubmodulesAtCommit(repository, baselineCommitSha)
+  const baselineGitlinks = new Map(
+    baselineSubmodules.map(submodule => [submodule.path, submodule.sha])
+  )
   const configuredBranches = await getConfiguredSubmoduleBranches(repository)
 
   for (const submodule of submodules) {
@@ -573,11 +455,8 @@ async function collectSubmodulesToPush(
     }
 
     const submoduleRepositoryPath = join(repository.path, submodule.path)
-    if (commitSha !== undefined) {
-      remoteTipGitlinks ??= await getGitlinksRecordedOnRemoteTips(repository)
-      if (remoteTipGitlinks.has(gitlinkKey(submodule.path, submodule.sha))) {
-        continue
-      }
+    if (baselineGitlinks.get(submodule.path) === submodule.sha) {
+      continue
     }
 
     if (!(await pathExists(join(submoduleRepositoryPath, '.git')))) {
@@ -687,21 +566,21 @@ async function collectSubmodulesToPush(
       )
     }
 
-    const publishStrategy = await getSubmoduleBranchPublishStrategy(
+    const publishComparison = await getSubmoduleBranchPublishStrategy(
       submoduleRepository,
       remote,
       remoteBranchName,
       referencedCommit
     )
-    if (publishStrategy === 'available') {
+    if (publishComparison.strategy === 'available') {
       continue
     }
-    if (publishStrategy === 'remote-ahead') {
+    if (publishComparison.strategy === 'remote-ahead') {
       throw new Error(
         `Unable to publish submodule "${displayPath}" because ${remote.name}/${remoteBranchName} contains remote changes that are not included in commit ${referencedCommit}. Merge or update the submodule before pushing the parent repository.`
       )
     }
-    if (publishStrategy === 'diverged') {
+    if (publishComparison.strategy === 'diverged') {
       throw new Error(
         `Unable to publish submodule "${displayPath}" because commit ${referencedCommit} has diverged from ${remote.name}/${remoteBranchName}. Merge the remote changes in the submodule before pushing the parent repository.`
       )
@@ -718,7 +597,8 @@ async function collectSubmodulesToPush(
       visitedRepositoryPaths,
       pushableSubmodules,
       referencedCommit,
-      remoteBranchName
+      remoteBranchName,
+      publishComparison.remoteTip
     )
 
     pushableSubmodules.push({
