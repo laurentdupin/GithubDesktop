@@ -573,13 +573,15 @@ async function collectSubmodulesToPush(
     }
 
     const submoduleRepositoryPath = join(repository.path, submodule.path)
+    if (commitSha !== undefined) {
+      remoteTipGitlinks ??= await getGitlinksRecordedOnRemoteTips(repository)
+      if (remoteTipGitlinks.has(gitlinkKey(submodule.path, submodule.sha))) {
+        continue
+      }
+    }
+
     if (!(await pathExists(join(submoduleRepositoryPath, '.git')))) {
       if (commitSha !== undefined) {
-        remoteTipGitlinks ??= await getGitlinksRecordedOnRemoteTips(repository)
-        if (remoteTipGitlinks.has(gitlinkKey(submodule.path, submodule.sha))) {
-          continue
-        }
-
         throw new Error(
           `Unable to verify submodule "${
             parentPath ? `${parentPath}/${submodule.path}` : submodule.path

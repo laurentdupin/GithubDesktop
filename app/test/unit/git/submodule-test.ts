@@ -268,6 +268,56 @@ describe('git/submodule', () => {
       )
     })
 
+    it('ignores remote changes for an unchanged gitlink', async t => {
+      const testRepoPath = await setupFixtureRepository(
+        t,
+        'submodule-basic-setup'
+      )
+      const repository = new Repository(testRepoPath, -1, null, false)
+      const submodulePath = path.join(testRepoPath, 'foo', 'submodule')
+      const parentRemotePath = await createTempDirectory(t)
+      const submoduleRemotePath = await createTempDirectory(t)
+      const remoteUpdaterPath = await createTempDirectory(t)
+
+      await exec(['init', '--bare'], parentRemotePath)
+      await exec(['remote', 'add', 'origin', parentRemotePath], testRepoPath)
+      await exec(['push', '-u', 'origin', 'master'], testRepoPath)
+
+      await exec(['init', '--bare'], submoduleRemotePath)
+      await exec(
+        ['remote', 'set-url', 'origin', submoduleRemotePath],
+        submodulePath
+      )
+      await exec(['push', '-u', 'origin', 'master'], submodulePath)
+
+      await exec(
+        ['clone', submoduleRemotePath, remoteUpdaterPath],
+        testRepoPath
+      )
+      await exec(
+        ['config', 'user.name', 'GitHub Desktop Test'],
+        remoteUpdaterPath
+      )
+      await exec(
+        ['config', 'user.email', 'test@githubdesktop.invalid'],
+        remoteUpdaterPath
+      )
+      await writeFile(path.join(remoteUpdaterPath, 'remote.txt'), 'newer')
+      await exec(['add', 'remote.txt'], remoteUpdaterPath)
+      await exec(['commit', '-m', 'advance remote branch'], remoteUpdaterPath)
+      await exec(['push', 'origin', 'master'], remoteUpdaterPath)
+
+      const parentCommit = (
+        await exec(['rev-parse', 'HEAD'], testRepoPath)
+      ).stdout.trim()
+      const result = await getSubmodulesToPush(
+        repository,
+        undefined,
+        parentCommit
+      )
+      assert.equal(result.length, 0)
+    })
+
     it('does not treat a synthetic remote tag as branch publication', async t => {
       const testRepoPath = await setupFixtureRepository(
         t,
