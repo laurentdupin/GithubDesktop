@@ -11,7 +11,10 @@ import {
   resetSubmodulePaths,
 } from '../../../src/lib/git/submodule'
 import { checkoutBranch, getBranches, getStatus } from '../../../src/lib/git'
-import { setupFixtureRepository } from '../../helpers/repositories'
+import {
+  setupEmptyRepository,
+  setupFixtureRepository,
+} from '../../helpers/repositories'
 import { createTempDirectory } from '../../helpers/temp'
 
 describe('git/submodule', () => {
@@ -310,6 +313,61 @@ describe('git/submodule', () => {
       const parentCommit = (
         await exec(['rev-parse', 'HEAD'], testRepoPath)
       ).stdout.trim()
+      const result = await getSubmodulesToPush(
+        repository,
+        undefined,
+        parentCommit
+      )
+      assert.equal(result.length, 0)
+    })
+
+    it('allows a newly added submodule to pin an older published commit', async t => {
+      const repository = await setupEmptyRepository(t)
+      const parentRemotePath = await createTempDirectory(t)
+      const submodule = await setupEmptyRepository(t)
+      const submoduleRemotePath = await createTempDirectory(t)
+
+      await writeFile(path.join(repository.path, 'README.md'), 'parent')
+      await exec(['add', 'README.md'], repository.path)
+      await exec(['commit', '-m', 'initial parent'], repository.path)
+      await exec(['init', '--bare'], parentRemotePath)
+      await exec(['remote', 'add', 'origin', parentRemotePath], repository.path)
+      await exec(['push', '-u', 'origin', 'master'], repository.path)
+
+      await writeFile(path.join(submodule.path, 'README.md'), 'first')
+      await exec(['add', 'README.md'], submodule.path)
+      await exec(['commit', '-m', 'first submodule commit'], submodule.path)
+      const pinnedCommit = (
+        await exec(['rev-parse', 'HEAD'], submodule.path)
+      ).stdout.trim()
+      await writeFile(path.join(submodule.path, 'README.md'), 'second')
+      await exec(['commit', '-am', 'advance submodule'], submodule.path)
+      await exec(['init', '--bare'], submoduleRemotePath)
+      await exec(
+        ['remote', 'add', 'origin', submoduleRemotePath],
+        submodule.path
+      )
+      await exec(['push', '-u', 'origin', 'master'], submodule.path)
+
+      await exec(
+        [
+          '-c',
+          'protocol.file.allow=always',
+          'submodule',
+          'add',
+          submoduleRemotePath,
+          'new-submodule',
+        ],
+        repository.path
+      )
+      const submodulePath = path.join(repository.path, 'new-submodule')
+      await exec(['checkout', '--detach', pinnedCommit], submodulePath)
+      await exec(['add', '.gitmodules', 'new-submodule'], repository.path)
+      await exec(['commit', '-m', 'add pinned submodule'], repository.path)
+      const parentCommit = (
+        await exec(['rev-parse', 'HEAD'], repository.path)
+      ).stdout.trim()
+
       const result = await getSubmodulesToPush(
         repository,
         undefined,

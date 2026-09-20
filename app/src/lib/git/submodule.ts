@@ -455,7 +455,8 @@ async function collectSubmodulesToPush(
     }
 
     const submoduleRepositoryPath = join(repository.path, submodule.path)
-    if (baselineGitlinks.get(submodule.path) === submodule.sha) {
+    const baselineGitlink = baselineGitlinks.get(submodule.path)
+    if (baselineGitlink === submodule.sha) {
       continue
     }
 
@@ -576,6 +577,12 @@ async function collectSubmodulesToPush(
       continue
     }
     if (publishComparison.strategy === 'remote-ahead') {
+      // A newly added submodule may intentionally pin an older commit. The
+      // commit is already published, so the parent can safely reference it.
+      if (baselineCommitSha !== undefined && baselineGitlink === undefined) {
+        continue
+      }
+
       throw new Error(
         `Unable to publish submodule "${displayPath}" because ${remote.name}/${remoteBranchName} contains remote changes that are not included in commit ${referencedCommit}. Merge or update the submodule before pushing the parent repository.`
       )
