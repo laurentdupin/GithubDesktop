@@ -126,6 +126,37 @@ async function getSubmoduleBranchPublishStrategy(
   }
 }
 
+async function isCommitAvailableFromShallowRemote(
+  repository: Repository,
+  remote: IRemote,
+  commitSha: string
+): Promise<boolean> {
+  const shallowCheck = await git(
+    ['rev-parse', '--is-shallow-repository'],
+    repository.path,
+    'isShallowSubmoduleRepository'
+  )
+  if (shallowCheck.stdout.trim() !== 'true') {
+    return false
+  }
+
+  // Asking for the exact object verifies that the remote can serve the pin
+  // without downloading the complete history just to perform an ancestry
+  // check. This does not update FETCH_HEAD, refs, or the worktree.
+  const fetchResult = await git(
+    ['fetch', '--no-tags', '--no-write-fetch-head', remote.name, commitSha],
+    repository.path,
+    'verifyShallowSubmoduleCommitOnRemote',
+    {
+      env: await envForRemoteOperation(remote.url),
+      expectedErrors: AuthenticationErrors,
+      successExitCodes: new Set([0, 1, 128]),
+    }
+  )
+
+  return fetchResult.exitCode === 0
+}
+
 async function getConfiguredSubmoduleBranches(repository: Repository) {
   const branches = new Map<string, string>()
   if (!(await pathExists(join(repository.path, '.gitmodules')))) {
@@ -588,6 +619,19 @@ async function collectSubmodulesToPush(
       )
     }
     if (publishComparison.strategy === 'diverged') {
+      const isNewSubmodule =
+        baselineCommitSha !== undefined && baselineGitlink === undefined
+      if (
+        isNewSubmodule &&
+        (await isCommitAvailableFromShallowRemote(
+          submoduleRepository,
+          remote,
+          referencedCommit
+        ))
+      ) {
+        continue
+      }
+
       throw new Error(
         `Unable to publish submodule "${displayPath}" because commit ${referencedCommit} has diverged from ${remote.name}/${remoteBranchName}. Merge the remote changes in the submodule before pushing the parent repository.`
       )

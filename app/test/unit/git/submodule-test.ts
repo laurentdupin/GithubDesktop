@@ -321,7 +321,7 @@ describe('git/submodule', () => {
       assert.equal(result.length, 0)
     })
 
-    it('allows a newly added submodule to pin an older published commit', async t => {
+    it('allows a newly added shallow submodule to pin an older published commit', async t => {
       const repository = await setupEmptyRepository(t)
       const parentRemotePath = await createTempDirectory(t)
       const submodule = await setupEmptyRepository(t)
@@ -362,6 +362,16 @@ describe('git/submodule', () => {
       )
       const submodulePath = path.join(repository.path, 'new-submodule')
       await exec(['checkout', '--detach', pinnedCommit], submodulePath)
+      const shallowPath = (
+        await exec(['rev-parse', '--git-path', 'shallow'], submodulePath)
+      ).stdout.trim()
+      await writeFile(shallowPath, `${pinnedCommit}\n`)
+      assert.equal(
+        (
+          await exec(['rev-parse', '--is-shallow-repository'], submodulePath)
+        ).stdout.trim(),
+        'true'
+      )
       await exec(['add', '.gitmodules', 'new-submodule'], repository.path)
       await exec(['commit', '-m', 'add pinned submodule'], repository.path)
       const parentCommit = (
